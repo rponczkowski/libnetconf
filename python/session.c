@@ -813,6 +813,62 @@ static PyObject *ncSessionGetVersion(ncSessionObject *self, void *closure)
 
 	return PyUnicode_FromFormat("%s", ver_s);
 }
+static PyObject *ncOpRpc(ncSessionObject *self, PyObject *args, PyObject *keywords)
+{
+    const char *body = NULL;
+    nc_rpc *rpc = NULL;
+    char *kwlist[] = {"body", NULL};
+
+    SESSION_CHECK(self);
+
+    /* Get input parameters */
+    if (! PyArg_ParseTupleAndKeywords(args, keywords, "z", kwlist, &body)) {
+        return (NULL);
+    }
+
+    if (body == NULL) {
+        PyErr_SetString(PyExc_ValueError, "Invalid \'body\' value.");
+        return (NULL);
+
+    }
+
+    /* create RPC */
+    rpc = nc_rpc_build(body, self->session);
+
+    if (!rpc) {
+        PyErr_SetString(PyExc_ValueError, "Couldn't create rpc message.");
+        return (NULL);
+    }
+
+    if (op_send_recv(self, rpc, NULL) == EXIT_SUCCESS) {
+        /* ... and return the result */
+        Py_RETURN_TRUE;
+    } else {
+        Py_RETURN_FALSE;
+    }
+}
+
+static PyObject *ncOpCommit(ncSessionObject *self)
+{
+    nc_rpc *rpc = NULL;
+
+    SESSION_CHECK(self);
+
+    /* create RPC */
+    rpc = nc_rpc_commit();
+
+    if (!rpc) {
+        PyErr_SetString(PyExc_ValueError, "Couldn't create rpc message.");
+        return (NULL);
+    }
+
+    if (op_send_recv(self, rpc, NULL) == EXIT_SUCCESS) {
+        /* ... and return the result */
+        Py_RETURN_TRUE;
+    } else {
+        Py_RETURN_FALSE;
+    }
+}
 
 static PyGetSetDef ncSessionGetSeters[] = {
     {"id", (getter)ncSessionGetId, NULL, "NETCONF Session id.", NULL},
@@ -863,6 +919,13 @@ static PyMethodDef ncSessionMethods[] = {
 	{"isActive", (PyCFunction)ncIsActive,
 		METH_NOARGS,
 		PyDoc_STR("Ask if the session is still active.")},
+	 {"rpc", (PyCFunction)ncOpRpc,
+	        METH_VARARGS | METH_KEYWORDS,
+	        PyDoc_STR("Execute NETCONF custom RPC.")},
+	 {"commit", (PyCFunction)ncOpCommit,
+	                METH_NOARGS,
+	                PyDoc_STR("Execute NETCONF <commit> RPC.")},
+
 	{NULL, NULL, 0, NULL}
 };
 
