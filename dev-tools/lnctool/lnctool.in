@@ -435,9 +435,14 @@ def generate_config_callbacks(name, paths, namespaces):
 			content += '\n\tPy_DECREF(c_old_node_object);'
 			content += '\n\tPy_DECREF(c_new_node_object);'
 			content += '\n\tPy_DECREF(args);'
-			content += '\n\tPy_DECREF(result);'
-			content += '\n\treturn EXIT_SUCCESS;'
-			content += '\n}\n'			
+            		content += '\n\tint ret = EXIT_SUCCESS;'
+	                content += '\n\tif(PyDict_Check(result) && PyDict_Size(result) > 0)'
+                        content += '\n\t{'
+                        content += '\n\t\tret = EXIT_FAILURE;'
+            		content += '\n\t}'       
+            		content += '\n\tPy_DECREF(result);'
+            		content += '\n\treturn ret;'
+			content += '\n}\n'
 		else:
 			content += '{\n\treturn EXIT_SUCCESS;\n}\n\n'
 		funcs_count += 1
