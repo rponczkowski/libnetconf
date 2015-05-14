@@ -57,6 +57,8 @@ RNGLIB='@RNGLIB@'
 XSLTDIR='@XSLTDIR@'
 TEMPLATEDIR='@TEMPLATEDIR@'
 
+pyAPI = False
+
 def pyang_output(arguments):
 	try:
 		data = subprocess.check_output(arguments)
@@ -177,6 +179,9 @@ def generate_callbacks_file(name, defs, model):
 	content += '#include <sys/inotify.h>\n'
 	content += '#include <libxml/tree.h>\n'
 	content += '#include <libnetconf_xml.h>\n'
+	if pyAPI:
+		content += '#include <Python.h>\n'
+		content += '#include <bytesobject.h>\n'
 	content += '\n'
 	# transAPI version
 	content += '/* transAPI version which must be compatible with libnetconf */\n'
@@ -204,6 +209,38 @@ def generate_callbacks_file(name, defs, model):
 	content += '                         executed again with previous configuration data to roll it back.\n'
 	content += ' */\n'
 	content += 'NC_EDIT_ERROPT_TYPE erropt = NC_EDIT_ERROPT_NOTSET;\n\n'
+	
+	if pyAPI:
+		content += '\n'
+		content +=	'struct func_elem\n'
+		content +=	'{\n' 
+		content +=	'	char* name;\n'
+		content +=	'	PyObject* py_func;\n'
+		content +=	'} typedef func_elem;\n\n'
+		content +=	'struct py_funcs_tab\n'
+		content +=	'{\n'
+		content +=	'	unsigned int func_count;\n'
+		content +=	'	func_elem* funcs;\n'
+		content +=	'} typedef py_funcs_tab;\n'
+		
+		
+		content +=	'static void free_py_funcs_tab(py_funcs_tab* tab)'
+		content +=	'\n{'
+		content +=	'\n\tint i = 0;'
+		content +=	'\n\tfor(;tab != NULL && i< tab->func_count; i++)'
+		content +=	'\n\t{'
+		content +=	'\n\t\tfree(tab->funcs[i].name);'
+		content +=	'\n\t}'
+		content +=	'\n\tfree(tab->funcs);'
+		content +=	'\n\tfree(tab);'
+		content +=	'\n}\n'
+
+		content +=	'static py_funcs_tab* py_rpc_funcs = NULL;\n'
+		content +=	'static py_funcs_tab* py_config_funcs = NULL;\n'
+		content +=	'static py_funcs_tab* py_state_funcs = NULL;\n'
+		content += 	'static py_funcs_tab* py_api_funcs = NULL;\n'
+		content +=	'static PyObject* call_py_func(const py_funcs_tab* const cb_funcs,const char* name,PyObject *arglist);\n'
+		content +=	'\nconst char* XMLDOC_CAP_NAME = "xmlDocPtr";'
 
 	# init and close functions
 	content += generate_init_callback()
@@ -216,10 +253,38 @@ def generate_callbacks_file(name, defs, model):
 	if not (model is None):
 		content += generate_rpc_callbacks(model)
 	content += generate_file_callbacks()
+		
+	if pyAPI:
+		content += generate_python_module_spec(name)
 
 	# Write to file
 	outf.write(content)
 	outf.close()
+    
+def generate_setup_file(name):
+    print args.output_dir+'/setup.py'
+    outf = open(args.output_dir+'/setup.py', 'w')
+    content = 'from distutils.core import setup, Extension'
+
+    content += '\n'+name+'APIModule = Extension("'+name+'",'
+    content += '\n                       sources=["'+name+'.c"],'
+    content += '\n                       depends=[],'
+    content += '\n                        libraries=["xml2","netconf"],'
+    content += '\n                        extra_compile_args=["-Wall"],'
+    content += '\n                    include_dirs=["/usr/include/libxml2"]'
+    content += '\n                    )'
+
+    content += '\nsetup(name="'+name +'API",'
+    content += '\n\tversion="0.0.1",'
+    content += '\n\tauthor="ADVA",'
+    content += '\n\tdescription="' +name +' Python bindings.",'
+    content += '\n\text_modules=['+name+'APIModule],'
+    content += '\n\tplatforms=["Linux"],'
+    content += '\n)'
+    outf.write(content)
+    outf.close()
+
+
 
 def generate_init_callback():
 	content = '';
@@ -236,8 +301,18 @@ def generate_init_callback():
 	content += ' * @param[out] running\tCurrent configuration of managed device.\n\n'
 	content += ' * @return EXIT_SUCCESS or EXIT_FAILURE\n'
 	content += ' */\n'
-	content += 'int transapi_init(xmlDocPtr *running) {\n'
-	content += '\treturn EXIT_SUCCESS;\n}\n\n'
+	content += 'int transapi_init(xmlDocPtr *running)\n'
+	if pyAPI:
+		content += '{'
+		content += '\n\tPyObject * c_running_object = call_py_func(py_api_funcs,"init",NULL);'
+		content += '\n\tif (PyCapsule_IsValid(c_running_object,XMLDOC_CAP_NAME))'
+		content += '\n\t{'
+		content += '\n\t\t*running = PyCapsule_GetPointer(c_running_object, XMLDOC_CAP_NAME);'
+		content += '\n\t}'
+		content += '\n\tPy_DECREF(c_running_object);'
+		content += '\n\treturn EXIT_SUCCESS;\n}\n\n'
+	else:
+		content += '{\n\treturn EXIT_SUCCESS;\n}\n\n'
 
 	return (content)
 
@@ -246,8 +321,14 @@ def generate_close_callback():
 	content += '/**\n'
 	content += ' * @brief Free all resources allocated on plugin runtime and prepare plugin for removal.\n'
 	content += ' */\n'
-	content += 'void transapi_close(void) {\n'
-	content += '\treturn;\n}\n\n'
+	content += 'void transapi_close(void)\n'
+	if pyAPI:
+		content += '{'
+		content += '\n\tPyObject* result = call_py_func(py_api_funcs,"close",NULL);'
+		content += '\n\tPy_DECREF(result);'
+		content += '\n}\n\n'
+	else:
+		content += '{\n\treturn;\n}\n\n'
 
 	return (content)
 
@@ -262,8 +343,35 @@ def generate_state_callback():
 	content += ' * @param[out] err  Double pointer to error structure. Fill error when some occurs.\n'
 	content += ' * @return State data as libxml2 xmlDocPtr or NULL in case of error.\n'
 	content += ' */\n'
-	content += 'xmlDocPtr get_state_data(xmlDocPtr model, xmlDocPtr running, struct nc_err **err) {\n'
-	content += '\treturn(NULL);\n}\n'
+	content += 'xmlDocPtr get_state_data(xmlDocPtr model, xmlDocPtr running, struct nc_err **err)\n'
+	if pyAPI:
+		content += '{'
+		content += '\n\tPyObject* args = NULL,*result = NULL;'
+		content += '\n\txmlDocPtr state = NULL;'
+		content += '\n\tPyObject * c_model_object = PyCapsule_New((void *)model, NULL, NULL);'
+		content +=  '\n\tif(running != NULL)'
+		content +=  '\n\t{'
+		content +=  '\n\t\tPyObject * c_running_object = PyCapsule_New((void *)running, NULL, NULL);'
+		content +=  '\n\t\targs = Py_BuildValue("(OO)",c_model_object, c_running_object);'
+		content += '\n\t\tPy_DECREF(c_running_object);'
+		content +=  '\n\t}'
+		content += '\n\telse'
+		content +=  '\n\t{'
+		content += '\n\t\targs = Py_BuildValue("(OO)",c_model_object, Py_None);'
+		content +=  '\n\t}'
+		content += '\n\tresult = call_py_func(py_state_funcs,"get",args);'
+		content += '\n\tPy_DECREF(c_model_object);'
+		content += '\n\tPy_DECREF(args);'
+		content += '\n\tif(PyCapsule_IsValid(result,XMLDOC_CAP_NAME))'
+		content += '\n\t{'		
+		content += '\n\t\tstate = PyCapsule_GetPointer(result, XMLDOC_CAP_NAME);'
+		content += '\n\t}'
+		content += '\n\tPy_DECREF(result);'
+		content += '\n\treturn state;'
+		content += '\n}'
+		content += '\n'
+	else:
+		content += '{\n\treturn(NULL);\n}\n'
 
 	return(content)
 
@@ -316,7 +424,22 @@ def generate_config_callbacks(name, paths, namespaces):
 		content += ' * @return EXIT_SUCCESS or EXIT_FAILURE\n'
 		content += ' */\n'
 		content += '/* !DO NOT ALTER FUNCTION SIGNATURE! */\n'
-		content += 'int '+func_name+'(void **data, XMLDIFF_OP op, xmlNodePtr old_node, xmlNodePtr new_node, struct nc_err **error) {\n\treturn EXIT_SUCCESS;\n}\n\n'
+		content += 'int '+func_name+'(void **data, XMLDIFF_OP op, xmlNodePtr old_node, xmlNodePtr new_node, struct nc_err **error)\n\n'
+		if pyAPI:
+			content += '{'
+			content += '\n\tPyObject* args = NULL,*result = NULL;'
+			content += '\n\tPyObject * c_old_node_object = PyCapsule_New((void *)old_node, NULL, NULL);'
+			content += '\n\tPyObject * c_new_node_object = PyCapsule_New((void *)new_node, NULL, NULL);'				
+			content += '\n\targs = Py_BuildValue("(iOO)",op, c_old_node_object,c_new_node_object);'
+			content += '\n\tresult = call_py_func(py_config_funcs,\"' + path +'\",args);'
+			content += '\n\tPy_DECREF(c_old_node_object);'
+			content += '\n\tPy_DECREF(c_new_node_object);'
+			content += '\n\tPy_DECREF(args);'
+			content += '\n\tPy_DECREF(result);'
+			content += '\n\treturn EXIT_SUCCESS;'
+			content += '\n}\n'			
+		else:
+			content += '{\n\treturn EXIT_SUCCESS;\n}\n\n'
 		funcs_count += 1
 
 	# in the end of file write strucure connecting paths in XML data with callback function
@@ -380,6 +503,26 @@ def generate_rpc_callbacks(doc):
 		# create callback function
 		rpc_function = 'nc_reply *rpc_'+re.sub(r'[^\w]', '_', rpc_name)+'(xmlNodePtr input) {\n'
 		rpc_function += '\treturn NULL;\n}\n'
+		if not pyAPI:
+			rpc_function += '\txmlNodePtr '+re.sub(r'[^\w]', '_', inp.prop('name'))+' = input['+str(rpc_input.index(inp))+'];\n'
+		if pyAPI:
+			rpc_function += '\n\tPyObject* params_dict = PyDict_New();'
+			if len(rpc_input) > 0:
+				rpc_function += '\n\tPyObject* xmlNode_cap = NULL;'
+			for inp in rpc_input:
+				rpc_function += '\n\txmlNode_cap = PyCapsule_New((void *)input[' + str(rpc_input.index(inp)) + '],NULL,NULL);'
+				rpc_function += '\n\tPyDict_SetItemString(params_dict,"' + inp.prop('name') + '",xmlNode_cap);'
+				rpc_function += '\n\tPy_DECREF(xmlNode_cap);'				
+			rpc_function += '\n\tnc_reply * reply;'
+			rpc_function += '\n\tPyObject* args = Py_BuildValue("(O)",params_dict);'
+			rpc_function += '\n\tPy_DECREF(params_dict);'
+			rpc_function += '\n\tresult = call_py_func(py_rpc_funcs,\"' + rpc_name +'\",args);'
+			rpc_function += '\n\tPy_DECREF(args);'
+			rpc_function += '\n\tPy_DECREF(result);'
+			rpc_function += '\n\treply = nc_reply_ok();'
+			rpc_function += '\n\treturn reply; \n}\n\n'
+		else:
+			rpc_function += '\n\treturn NULL; \n}\n'
 		content += rpc_function
 
 		if not rpc is rpcs[0]:
@@ -426,6 +569,180 @@ def generate_file_callbacks():
 
 	return(content)
 
+def generate_python_module_spec(name):
+	content = ''
+	content += 'char* get_string(PyObject* mystring)'
+	content += '\n{'
+	content += '\n#if PY_MAJOR_VERSION >= 3'
+	content += '\n\tPyObject * ascii_mystring = PyUnicode_AsASCIIString(mystring);'
+	content += '\n\tchar* ret_str = strdup(PyBytes_AsString(ascii_mystring));'
+	content += '\n\tPy_DECREF(ascii_mystring);'
+	content += '\n#else'
+	content += '\n\tchar* ret_str = strdup(PyString_AsString(mystring));'
+	content += '\n#endif'
+	content += '\n\treturn ret_str;'
+	content += '\n}\n'
+	content += '\nstatic PyObject* call_py_func(const py_funcs_tab* const cb_funcs,const char* name,PyObject *arglist)'
+	content += '\n{'
+	content += '\n\tPyObject *result = Py_None,*return_obj = NULL;'
+	content += '\n\tPy_INCREF(Py_None);'
+	content += '\n\tint i=0;'
+	content += '\n\tfor(;cb_funcs != NULL && i< cb_funcs->func_count; i++)'
+	content += '\n\t{'
+	content += '\n\t\tif(strcmp(cb_funcs->funcs[i].name,name) == 0)'
+	content += '\n\t\t{'
+	content += '\n\t\t\treturn_obj = PyObject_CallObject(cb_funcs->funcs[i].py_func, arglist);'
+	content += '\n\t\t\tif(return_obj == NULL)'
+	content += '\n\t\t\t\tPyErr_Print();'
+	content += '\n\t\t\telse'
+	content += '\n\t\t\t{'
+	content += '\n\t\t\t\tPy_DECREF(Py_None);'
+	content += '\n\t\t\t\tresult = return_obj;'
+	content += '\n\t\t\t}'
+	content += '\n\t\t\tbreak;'
+	content += '\n\t\t}'
+	content += '\n\t}'
+	content += '\n\treturn result;'
+	content += '\n}\n'
+
+	content += '\nstatic PyObject *'
+	content += '\nmy_set_callbacks(PyObject *self, PyObject *args, PyObject *keywds)'
+	content += '\n{'
+	content += '\n\tPyObject *funcs_dict;'
+	content += '\n'
+	content += '\n\tchar* callbacks_type_str = NULL;'
+	content += '\n'
+	content += '\n\tstatic char *kwlist[] = {"callbacks_type", "callbacks_dict", NULL};'
+	content += '\n\tif (! PyArg_ParseTupleAndKeywords(args, keywds, "sO!", kwlist,&callbacks_type_str,&PyDict_Type, &funcs_dict))'
+	content += '\n\t{'
+	content += '\n\t\treturn NULL;'
+	content += '\n\t}'
+
+	content += '\n\tsize_t func_count = PyDict_Size(funcs_dict);'
+    
+	content += '\n\tpy_funcs_tab** py_x_funcs = NULL;'
+	content += '\n\tif(strcmp(callbacks_type_str,"rpc") == 0)'
+	content += '\n\t{'
+	content += '\n\t\tpy_x_funcs = &py_rpc_funcs;'
+	content += '\n\t}'
+	content += '\n\telse if(strcmp(callbacks_type_str,"config") == 0)'
+	content += '\n\t{'
+	content += '\n\t\tpy_x_funcs = &py_config_funcs;'
+	content += '\n\t}'
+	content += '\n\telse if(strcmp(callbacks_type_str,"state") == 0)'
+	content += '\n\t{'
+	content += '\n\t\tpy_x_funcs = &py_state_funcs;'
+	content += '\n\t}'
+	content += '\n\telse if(strcmp(callbacks_type_str,"api") == 0)'
+	content += '\n\t{'
+	content += '\n\t\tpy_x_funcs = &py_api_funcs;'
+	content += '\n\t}'
+	content += '\n'
+	content += '\n\tif (py_x_funcs != NULL)'
+	content += '\n\t{'
+	content += '\n\t\tif ((*py_x_funcs) != NULL)'
+	content += '\n\t\t{'    		
+	content += '\n\t\t\tfree_py_funcs_tab(*py_x_funcs);'
+	content += '\n\t\t}'
+	content += '\n\t\t(*py_x_funcs) = malloc (sizeof(py_funcs_tab));'
+	content += '\n\t\t(*py_x_funcs)->funcs = malloc (sizeof(func_elem) *func_count);'
+	content += '\n'
+	content += '\n\t\t(*py_x_funcs)->func_count = func_count;'
+	content += '\n\t\tPyObject *key, *value;'
+	content += '\n\t\tPy_ssize_t pos = 0;'
+	content += '\n\t\tunsigned int i = 0;'
+	content += '\n\t\twhile (PyDict_Next(funcs_dict, &pos, &key, &value))'
+	content += '\n\t\t{'
+	content += '\n\t\t\t(*py_x_funcs)->funcs[i].name = get_string(key);'
+	content += '\n\t\t\t(*py_x_funcs)->funcs[i].py_func = value;'
+	content += '\n\t\t\tif (!PyCallable_Check((*py_x_funcs)->funcs[i].py_func))'
+	content += '\n\t\t\t{'
+	content += '\n\t\t\t\tPyErr_SetString(PyExc_TypeError, "parameter must be callable");'
+	content += '\n\t\t\t\tfree_py_funcs_tab(*py_x_funcs);'
+	content += '\n\t\t\t\t*py_x_funcs = NULL;'
+	content += '\n\t\t\t\treturn NULL;'
+	content += '\n\t\t\t}'	
+	content += '\n\t\t\ti++;'
+	content += '\n\t\t}'
+	content += '\n\t}'
+	content += '\n\telse'
+	content += '\n\t{'
+	content += '\n\t\tPyErr_SetString(PyExc_TypeError, "Unknown Type of callbacks");'
+	content += '\n\t\treturn NULL;'
+	content += '\n\t}'
+	content += '\n'
+	content += '\n\tPy_RETURN_NONE;'
+	content += '\n}'
+	content += '\n'
+	content += '\nstruct transapi transapi = {.init = &transapi_init,'
+	content += '\n\t.get_state = &get_state_data,'
+	content += '\n\t.rpc_clbks = &rpc_clbks,'
+	content += '\n\t.config_modified = &config_modified,'
+	content += '\n\t.erropt = &erropt,'
+	content += '\n\t.ns_mapping = namespace_mapping,'
+	content += '\n\t.data_clbks = &clbks};'
+	content += '\n'
+
+	content += '\nstatic PyObject *get_transapi(PyObject *self, PyObject *args, PyObject *keywords)'
+	content += '\n{'
+	content += '\n\tPyObject * c_api_object = PyCapsule_New((void *)&transapi, "transapi._X_C_API", NULL);'
+	content += '\n'
+	content += '\n\treturn c_api_object;'
+	content += '\n}\n'
+
+	content += '\nstatic PyMethodDef ' + name + 'Methods[] = {'
+	content += '\n\t{"get_transapi", (PyCFunction)get_transapi, METH_VARARGS | METH_KEYWORDS, "toaster get_transapi"},'
+	content += '\n\t{"set_callbacks",(PyCFunction)my_set_callbacks,METH_VARARGS | METH_KEYWORDS,"add callback"},'
+	content += '\n\t{NULL, NULL, 0, NULL}'
+	content += '\n};\n'
+
+	content += '\n#if PY_MAJOR_VERSION >= 3'
+	content += '\n\tstatic struct PyModuleDef ' +name +'Module = {'
+	content += '\n\t\tPyModuleDef_HEAD_INIT,'
+	content += '\n\t\t"'+ name + '",'
+	content += '\n\t\t"'+ name + ' python API ",'
+	content += '\n\t\t-1,'
+	content += '\n\t\t'+ name + 'Methods,'
+	content += '\n\t};\n'
+
+	content += '\n\t#define MOD_INIT(name) PyMODINIT_FUNC PyInit_##name(void)'
+	content += '\n\t#define INITERROR return NULL'
+	
+	content += '\n#else'
+	content += '\n\t#define MOD_INIT(name) PyMODINIT_FUNC init##name(void)'
+	content += '\n\t#define INITERROR return'
+	content += '\n#endif'
+
+	content += '\n/* module initializer */'
+	content += '\nMOD_INIT('+ name +')'
+	content += '\n{'
+	content += '\n\tPyObject *module;'
+	content += '\n'
+	content += '\n\t/* create '+ name +' as the Python module */'
+	content += '\n\t#if PY_MAJOR_VERSION >= 3'
+	content += '\n\t\tmodule = PyModule_Create(&'+name+'Module);'
+	content += '\n\t#else'
+	content += '\n\t\tmodule = Py_InitModule3("' + name+'",'
+	content += '\n\t\t' + name + 'Methods, "'+name+ ' python API");'
+	content += '\n\t#endif'
+	content += '\n\tif (module == NULL) {'
+	content += '\n\t\tINITERROR;'
+	content += '\n\t}'
+
+	content += '\n\tPyModule_AddIntConstant(module,"XMLDIFF_ERR",XMLDIFF_ERR);'
+	content += '\n\tPyModule_AddIntConstant(module,"XMLDIFF_ADD",XMLDIFF_ADD);'
+	content += '\n\tPyModule_AddIntConstant(module,"XMLDIFF_REM",XMLDIFF_REM);'
+	content += '\n\tPyModule_AddIntConstant(module,"XMLDIFF_MOD",XMLDIFF_MOD);'
+	content += '\n\tPyModule_AddIntConstant(module,"XMLDIFF_CHAIN",XMLDIFF_CHAIN);'
+	content += '\n\tPyModule_AddIntConstant(module,"XMLDIFF_SIBLING",XMLDIFF_SIBLING);'
+	content += '\n\tPyModule_AddIntConstant(module,"XMLDIFF_REORDER",XMLDIFF_REORDER);'
+	content += '\n'
+	content += '\n#if PY_MAJOR_VERSION >= 3'
+	content += '\n\treturn module;'
+	content += '\n#endif'
+	content += '\n\t}'
+
+	return content
 # "main" starts here
 # create argument parser
 parser = argparse.ArgumentParser(description="Actions have the following meanings:\n"
@@ -465,6 +782,12 @@ parser_transapi.add_argument('--paths', type=argparse.FileType('r'), help='File 
 parser_transapi.add_argument('--template-dir', default=TEMPLATEDIR, help='Path to the directory with template files')
 parser_transapi.add_argument('--no-autotools-files', help='Do not generate autotools template files', action='store_true')
 
+parser_transapi_py = subparsers.add_parser('transapi_py')
+parser_transapi_py.add_argument('--name', help='Name of module with callbacks. If not supplied name of module in data model will be used.')
+parser_transapi_py.add_argument('--paths', type=argparse.FileType('r'), help='File holding list of sensitive paths in configuration XML.')
+parser_transapi_py.add_argument('--template-dir', default=TEMPLATEDIR, help='Path to the directory with template files')
+parser_transapi_py.add_argument('--no-autotools-files', help='Do not generate autotools template files', action='store_true')
+
 # add common model option
 try:
 	augment_models = []
@@ -489,10 +812,13 @@ try:
 	if args.subcommand != 'convert':
 		generate_validators(model_name+'.yin', augment_models_paths, args.search_path, args.feature)
 
-	if args.subcommand == 'transapi':
+	if args.subcommand == 'transapi' or args.subcommand == "transapi_py":
+		if args.subcommand == 'transapi_py':
+			pyAPI = True
 		# process model and find module name
 		if args.name is None:
 			(module_name,ext) = os.path.splitext(os.path.basename(args.model.name))
+			module_name = module_name.translate(None, '-@')
 		else:
 			module_name = args.name
 
@@ -500,11 +826,14 @@ try:
 			# store paterns and text for replacing in configure.in
 			replace = {'$$PROJECTNAME$$' : module_name}
 
+		if not pyAPI:
 			# copy files for autotools (Makefile.in, ...)
 			generate_template_files(replace)
-
+            	else:
+                	generate_setup_file(module_name)
 		#generate callbacks code
 		generate_callbacks_file(module_name, args.paths, model)
+
 except ValueError as e:
 	print (e)
 	os.sys.exit(1)
