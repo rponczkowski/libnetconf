@@ -8,14 +8,14 @@
 CC      = gcc
 CFLAGS  = -Wall -g
 INCLUDE = -I../../src/ 
-LIB     = -lnetconf
-LIBPATH	= -L../../.libs/
+LIB     = -lnetconf -lrt
+LIBPATH	= -L../../.libs
 TARGETS = get notif
 
 all: $(TARGETS)
 
 get: get.c
-	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LIBPATH) $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $^ $(LIBPATH) $(LIB)
 
 notif: notif.c
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LIBPATH) $(LIB)

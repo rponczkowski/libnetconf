@@ -142,6 +142,7 @@ static struct ncds ncds = {NULL, NULL, 0, 0};
 static struct model_list *models_list = NULL;
 static struct transapi_list* augment_tapi_list = NULL;
 static char** models_dirs = NULL;
+char* working_dir = NULL;
 
 static nc_reply* ncds_apply_rpc(ncds_id id, const struct nc_session* session, const nc_rpc* rpc);
 static char* get_state_nacm(const char* UNUSED(model), const char* UNUSED(running), struct nc_err ** UNUSED(e));
@@ -163,7 +164,7 @@ static struct ncds_ds *datastores_get_ds(ncds_id id);
 
 #ifndef DISABLE_YANGFORMAT
 /* XSL stylesheet for transformation from YIN to YANG format */
-#define YIN2YANG NC_WORKINGDIR_PATH"/yin2yang.xsl"
+//#define YIN2YANG NC_WORKINGDIR_PATH"/yin2yang.xsl"
 static xsltStylesheetPtr yin2yang_xsl = NULL;
 #endif
 
@@ -246,10 +247,34 @@ static struct ncds_ds* ncds_fill_func(NCDS_TYPE type)
 int internal_ds_count = 0;
 int ncds_sysinit(int flags)
 {
-	int i;
+	int i, ret = EXIT_FAILURE;
 	struct ncds_ds *ds;
 	struct ncds_ds_list *dsitem;
 	struct model_list *list_item;
+	char *pdatastore_acm = NULL, *pacm_relaxng = NULL, *pacm_schematron = NULL;
+
+	if((working_dir = getenv(NC_DIR_PATH_ENV)) == NULL)
+	{
+		working_dir = NC_WORKINGDIR_PATH;
+	}
+
+	pdatastore_acm = malloc(strlen(working_dir)+sizeof("/datastore-acm.xml")+1);
+	if(!pdatastore_acm) {
+		goto _ERROR;
+	}
+	sprintf(pdatastore_acm, "%s/datastore-acm.xml", working_dir);
+
+	pacm_relaxng = malloc(strlen(working_dir)+sizeof("/ietf-netconf-acm-config.rng")+1);
+	if(!pacm_relaxng) {
+		goto _ERROR;
+	}
+	sprintf(pacm_relaxng, "%s/ietf-netconf-acm-data.rng", working_dir);
+
+	pacm_schematron = malloc(strlen(working_dir)+sizeof("/ietf-netconf-acm-schematron.xsl")+1);
+	if(!pacm_schematron) {
+		goto _ERROR;
+	}
+	sprintf(pacm_schematron, "%s/ietf-netconf-acm-schematron.xsl", working_dir);
 
 	unsigned char* model[INTERNAL_DS_COUNT] = {
 			ietf_inet_types_yin,
@@ -301,7 +326,7 @@ int ncds_sysinit(int flags)
 			{NCDS_TYPE_EMPTY, NULL}, /* notifications */
 #endif
 			{NCDS_TYPE_EMPTY, NULL},
-			{NCDS_TYPE_FILE, NC_WORKINGDIR_PATH"/datastore-acm.xml"}
+			{NCDS_TYPE_FILE, pdatastore_acm}
 	};
 #ifndef DISABLE_VALIDATION
 	char* relaxng_validators[INTERNAL_DS_COUNT] = {
@@ -315,7 +340,7 @@ int ncds_sysinit(int flags)
 			NULL, /* notifications */
 #endif
 			NULL, /* ietf-netconf-with-defaults */
-			NC_WORKINGDIR_PATH"/ietf-netconf-acm-config.rng" /* NACM RelaxNG schema */
+			pacm_relaxng /* NACM RelaxNG schema */
 	};
 	char* schematron_validators[INTERNAL_DS_COUNT] = {
 			NULL, /* ietf-inet-types */
@@ -328,7 +353,7 @@ int ncds_sysinit(int flags)
 			NULL, /* notifications */
 #endif
 			NULL, /* ietf-netconf-with-defaults */
-			NC_WORKINGDIR_PATH"/ietf-netconf-acm-schematron.xsl" /* NACM Schematron XSL stylesheet */
+			pacm_schematron /* NACM Schematron XSL stylesheet */
 	};
 #endif
 
@@ -359,7 +384,7 @@ int ncds_sysinit(int flags)
 		ds = ncds_fill_func(internal_ds_desc[i].type);
 		if (ds == NULL) {
 			/* The error was reported already. */
-			return (EXIT_FAILURE);
+			goto _ERROR;
 		}
 		ds->id = internal_ds_count++;
 		ds->type = internal_ds_desc[i].type;
@@ -367,7 +392,7 @@ int ncds_sysinit(int flags)
 			ERROR("Linking internal datastore to a file (%s) failed.", internal_ds_desc[i].filename);
 			ncds_free(ds);
 			internal_ds_count--;
-			return (EXIT_FAILURE);
+			goto _ERROR;
 		}
 
 		ds->data_model = calloc(1, sizeof(struct data_model));
@@ -375,7 +400,7 @@ int ncds_sysinit(int flags)
 			ERROR("Memory allocation failed (%s:%d).", __FILE__, __LINE__);
 			ncds_free(ds);
 			internal_ds_count--;
-			return (EXIT_FAILURE);
+			goto _ERROR;
 		}
 
 		ds->data_model->xml = xmlReadMemory ((char*)model[i], model_len[i], NULL, NULL, NC_XMLREAD_OPTIONS);
@@ -383,7 +408,7 @@ int ncds_sysinit(int flags)
 			ERROR("Unable to read the internal monitoring data model.");
 			ncds_free(ds);
 			internal_ds_count--;
-			return (EXIT_FAILURE);
+			goto _ERROR;
 		}
 
 		/* prepare xpath evaluation context of the model for XPath */
@@ -392,13 +417,13 @@ int ncds_sysinit(int flags)
 			ncds_free(ds);
 			internal_ds_count--;
 			/* with-defaults cannot be found */
-			return (EXIT_FAILURE);
+			goto _ERROR;
 		}
 		if (xmlXPathRegisterNs(ds->data_model->ctxt, BAD_CAST NC_NS_YIN_ID, BAD_CAST NC_NS_YIN) != 0) {
 			xmlXPathFreeContext(ds->data_model->ctxt);
 			ncds_free(ds);
 			internal_ds_count--;
-			return (EXIT_FAILURE);
+			goto _ERROR;
 		}
 
 		if (get_model_info(ds->data_model->ctxt,
@@ -411,7 +436,7 @@ int ncds_sysinit(int flags)
 			ERROR("Unable to process internal configuration data model.");
 			ncds_free(ds);
 			internal_ds_count--;
-			return (EXIT_FAILURE);
+			goto _ERROR;
 		}
 
 		ds->data_model->path = NULL;
@@ -432,7 +457,7 @@ int ncds_sysinit(int flags)
 			ERROR("Memory allocation failed (%s:%d).", __FILE__, __LINE__);
 			ncds_free(ds);
 			internal_ds_count--;
-			return (EXIT_FAILURE);
+			goto _ERROR;
 		}
 		list_item->model = ds->data_model;
 		list_item->next = models_list;
@@ -454,7 +479,7 @@ int ncds_sysinit(int flags)
 			ERROR("Memory allocation failed (%s:%d).", __FILE__, __LINE__);
 			ncds_free(ds);
 			internal_ds_count--;
-			return (EXIT_FAILURE);
+			goto _ERROR;
 		}
 		if (i == NACM_DS_INDEX) {
 			/* provide NACM datastore to the NACM subsystem for faster access */
@@ -472,7 +497,7 @@ int ncds_sysinit(int flags)
 				internal_ds_count--;
 				ncds.datastores = NULL;
 				ncds.count--;
-				return (EXIT_FAILURE);
+				goto _ERROR;
 			}
 
 			ncds.array_size += 10;
@@ -485,13 +510,30 @@ int ncds_sysinit(int flags)
 #ifndef DISABLE_YANGFORMAT
 	/* try to get yin2yang XSLT stylesheet */
 	errno = 0;
-	if (eaccess(YIN2YANG, R_OK) == -1 || (yin2yang_xsl = xsltParseStylesheetFile(BAD_CAST YIN2YANG)) == NULL) {
-		WARN("Unable to use %s (%s).", YIN2YANG, errno == 0 ? "XSLT parser failed" : strerror(errno));
+	char *yin2yang = malloc(strlen(working_dir)+sizeof("/yin2yang.xsl")+1);
+	if(yin2yang != NULL) {
+        sprintf(yin2yang, "%s/yin2yang.xsl", working_dir);
+    }
+	if (yin2yang == NULL ||
+		eaccess(yin2yang, R_OK) == -1 || (yin2yang_xsl = xsltParseStylesheetFile(BAD_CAST yin2yang)) == NULL) {
+		WARN("Unable to use %s (%s).", yin2yang, errno == 0 ? "XSLT parser failed" : strerror(errno));
 		WARN("YANG format data models will not be available via get-schema.");
 	}
+	free(yin2yang);
 #endif
 
-	return (EXIT_SUCCESS);
+	ret = EXIT_SUCCESS;
+_ERROR:
+	if(pdatastore_acm) {
+		free(pdatastore_acm);
+	}
+	if(pacm_relaxng) {
+		free(pacm_relaxng);
+	}
+	if(pacm_schematron) {
+		free(pacm_schematron);
+	}
+	return(ret);
 }
 
 void ncds_startup_internal(void)
