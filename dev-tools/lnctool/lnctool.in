@@ -428,8 +428,8 @@ def generate_config_callbacks(name, paths, namespaces):
 		if pyAPI:
 			content += '{'
 			content += '\n\tPyObject* args = NULL,*result = NULL;'
-			content += '\n\tPyObject * c_old_node_object = PyCapsule_New((void *)old_node, NULL, NULL);'
-			content += '\n\tPyObject * c_new_node_object = PyCapsule_New((void *)new_node, NULL, NULL);'				
+			content += '\n\tPyObject * c_old_node_object = old_node ? PyCapsule_New((void *)old_node, NULL, NULL) : Py_None;'
+			content += '\n\tPyObject * c_new_node_object = new_node ? PyCapsule_New((void *)new_node, NULL, NULL) : Py_None;'				
 			content += '\n\targs = Py_BuildValue("(iOO)",op, c_old_node_object,c_new_node_object);'
 			content += '\n\tresult = call_py_func(py_config_funcs,\"' + path +'\",args);'
 			content += '\n\tPy_DECREF(c_old_node_object);'
@@ -690,6 +690,7 @@ def generate_python_module_spec(name):
 
 	content += '\nstatic PyObject *get_transapi(PyObject *self, PyObject *args, PyObject *keywords)'
 	content += '\n{'
+	content += '\n\ttransapi.version = transapi_version;'
 	content += '\n\tPyObject * c_api_object = PyCapsule_New((void *)&transapi, "transapi._X_C_API", NULL);'
 	content += '\n'
 	content += '\n\treturn c_api_object;'
