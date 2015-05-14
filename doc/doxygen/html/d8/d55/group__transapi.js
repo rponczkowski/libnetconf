@@ -1,7 +1,7 @@
 var group__transapi =
 [
     [ "clbk", "d0/dd1/structclbk.html", [
-      [ "func", "d0/dd1/structclbk.html#a32d40f1c10b08061196dc6b7a9ab072c", null ],
+      [ "func", "d0/dd1/structclbk.html#aecdb0401379b34c8aa71dd594b79d45d", null ],
       [ "path", "d0/dd1/structclbk.html#a44196e6a5696d10442c29e639437196e", null ]
     ] ],
     [ "transapi", "d9/dc0/structtransapi.html", [
@@ -14,7 +14,8 @@ var group__transapi =
       [ "get_state", "d9/dc0/structtransapi.html#a6c403c3ae7c1ca5654fdaf60b60ba16b", null ],
       [ "init", "d9/dc0/structtransapi.html#a8cb29ceda55d20ecbec3784d536851db", null ],
       [ "ns_mapping", "d9/dc0/structtransapi.html#a517eb18d6321490a3439ae595edbf9a4", null ],
-      [ "rpc_clbks", "d9/dc0/structtransapi.html#ae40968626e78bf37871565d98292b1b7", null ]
+      [ "rpc_clbks", "d9/dc0/structtransapi.html#ae40968626e78bf37871565d98292b1b7", null ],
+      [ "version", "d9/dc0/structtransapi.html#aad880fc4455c253781e8968f2239d56f", null ]
     ] ],
     [ "transapi_data_callbacks", "d6/dcb/structtransapi__data__callbacks.html", [
       [ "callbacks", "d6/dcb/structtransapi__data__callbacks.html#a37c3f849c79cfe4991c6d0a6526b12d7", null ],
@@ -28,11 +29,9 @@ var group__transapi =
       [ "path", "de/df8/structtransapi__file__callbacks.html#a3b02c6de5c049804444a246f7fdf46b4", null ]
     ] ],
     [ "transapi_rpc_callbacks", "d0/df8/structtransapi__rpc__callbacks.html", [
-      [ "arg_count", "d0/df8/structtransapi__rpc__callbacks.html#ad4e017d16d393756e4e27927d06084ec", null ],
-      [ "arg_order", "d0/df8/structtransapi__rpc__callbacks.html#ae5d4a40ee77a8f12e0cb49f592719338", null ],
       [ "callbacks", "d0/df8/structtransapi__rpc__callbacks.html#a0ad28c1d0d3518ca0b3d631a20eaf48d", null ],
       [ "callbacks_count", "d0/df8/structtransapi__rpc__callbacks.html#a853d73f0f495147dba4842e9f860d1f0", null ],
-      [ "func", "d0/df8/structtransapi__rpc__callbacks.html#a15569b8737513da9b760834a5e5be80c", null ],
+      [ "func", "d0/df8/structtransapi__rpc__callbacks.html#a4e198e0f385cc9d713aa918597858fbb", null ],
       [ "name", "d0/df8/structtransapi__rpc__callbacks.html#a5ac083a645d964373f022d03df4849c8", null ]
     ] ],
     [ "XMLDIFF_OP", "d8/d55/group__transapi.html#ga10d59d84527f735d2781dbbb629a4488", [

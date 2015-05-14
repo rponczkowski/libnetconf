@@ -1505,7 +1505,7 @@ static int _event_new(time_t etime, NCNTF_EVENT event, va_list params)
 					"<source-host>%s</source-host>",
 					session->username,
 					session->session_id,
-					session->hostname) == -1) {
+					session->hostname ? session->hostname : "") == -1) {
 				ERROR("asprintf() failed (%s:%d).", __FILE__, __LINE__);
 				aux2 = NULL;
 			}
@@ -1665,7 +1665,7 @@ static int _event_new(time_t etime, NCNTF_EVENT event, va_list params)
 					"<source-host>%s</source-host>",
 					session->username,
 					session->session_id,
-					session->hostname) == -1) {
+					session->hostname ? session->hostname : "") == -1) {
 				ERROR("asprintf() failed (%s:%d).", __FILE__, __LINE__);
 				aux1 = NULL;
 			}
@@ -1696,7 +1696,7 @@ static int _event_new(time_t etime, NCNTF_EVENT event, va_list params)
 				"<source-host>%s</source-host></netconf-session-start>",
 				session->username,
 				session->session_id,
-				session->hostname) == -1) {
+				session->hostname ? session->hostname : "") == -1) {
 			ERROR("asprintf() failed (%s:%d).", __FILE__, __LINE__);
 			return (EXIT_FAILURE);
 		}
@@ -1737,7 +1737,7 @@ static int _event_new(time_t etime, NCNTF_EVENT event, va_list params)
 				"%s%s</netconf-session-end>",
 				session->username,
 				session->session_id,
-				session->hostname,
+				session->hostname ? session->hostname : "",
 				(aux2 == NULL) ? "" : aux2,
 				(aux1 == NULL) ? "" : aux1) == -1) {
 			ERROR("asprintf() failed (%s:%d).", __FILE__, __LINE__);
@@ -2528,7 +2528,9 @@ API long long int ncntf_dispatch_send(struct nc_session* session, const nc_rpc* 
 				if (!session->ntf_stop) {
 					DBG_UNLOCK("mut_ntf");
 					pthread_mutex_unlock(&(session->mut_ntf));
-					nc_session_send_notif(session, ntf);
+					if (nc_session_send_notif(session, ntf) != EXIT_SUCCESS) {
+						ERROR("Sending a notification failed.");
+					}
 				} else {
 					DBG_UNLOCK("mut_ntf");
 					pthread_mutex_unlock(&(session->mut_ntf));
@@ -2583,7 +2585,10 @@ API long long int ncntf_dispatch_send(struct nc_session* session, const nc_rpc* 
 		ntf->nacm = NULL;
 
 		/* do not use ACM - notificationComplete is always permitted */
-		nc_session_send_notif(session, ntf);
+		if (nc_session_send_notif(session, ntf) != EXIT_SUCCESS) {
+			ERROR("Sending a notification failed.");
+			return (-1);
+		}
 		ncntf_notif_free(ntf);
 		free(event);
 	}
@@ -2714,3 +2719,7 @@ API long long int ncntf_dispatch_receive(struct nc_session *session, void (*proc
 	return (count);
 }
 
+API int ncntf_session_get_active_subscription(struct nc_session *session)
+{
+	return session->ntf_active;
+}

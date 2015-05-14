@@ -131,40 +131,6 @@ API void nc_ssh_pref(NC_SSH_AUTH_TYPE type, short int preference)
 
 #define SSH2_TIMEOUT 10000 /* timeout for blocking functions in miliseconds */
 
-static int find_ssh_keys(void)
-{
-	struct passwd *pw;
-	char * user_home, *key_pub_path = NULL, *key_priv_path = NULL;
-	char * key_names[SSH2_KEYS] = {"id_rsa", "id_dsa", "id_ecdsa"};
-	int i, x, y, retval = EXIT_FAILURE;
-
-	if ((pw = getpwuid(getuid())) == NULL) {
-		VERB("Determining user's home directory for getting SSH keys failed (%s)", strerror(errno));
-		return EXIT_FAILURE;
-	}
-	user_home = pw->pw_dir;
-
-	/* search in the same location as ssh do (~/.ssh/) */
-	VERB("Searching for the key pairs in the standard ssh directory.");
-	for (i = 0; i < SSH2_KEYS; i++) {
-		x = asprintf (&key_priv_path, "%s/.ssh/%s", user_home, key_names[i]);
-		y = asprintf (&key_pub_path, "%s/.ssh/%s.pub", user_home, key_names[i]);
-		if (x == -1 || y == -1) {
-			VERB("asprintf() failed (%s:%d).", __FILE__, __LINE__);
-			continue;
-		}
-		if (eaccess(key_priv_path, R_OK) == 0 && eaccess(key_pub_path, R_OK) == 0) {
-			VERB("Found a pair %s[.pub]", key_priv_path);
-			nc_set_keypair_path(key_priv_path, key_pub_path);
-			retval = EXIT_SUCCESS;
-		}
-		free (key_priv_path);
-		free (key_pub_path);
-	}
-
-	return retval;
-}
-
 struct nc_session *nc_session_connect_libssh2_socket(const char* username, const char* host, int sock)
 {
 	struct nc_session *retval = NULL;
@@ -285,7 +251,9 @@ struct nc_session *nc_session_connect_libssh2_socket(const char* username, const
 	}
 
 	/* check what authentication methods are available */
-	userauthlist = libssh2_userauth_list(retval->ssh_session, username, strlen(username));
+	do {
+		userauthlist = libssh2_userauth_list(retval->ssh_session, username, strlen(username));
+	} while (userauthlist == NULL && libssh2_session_last_errno(retval->ssh_session) == LIBSSH2_ERROR_TIMEOUT);
 	if (userauthlist != NULL) {
 		if (strstr(userauthlist, "password")) {
 			if (callbacks.sshauth_password != NULL) {
@@ -326,12 +294,16 @@ struct nc_session *nc_session_connect_libssh2_socket(const char* username, const
 		case NC_SSH_AUTH_PASSWORD:
 			VERB("Password authentication (host %s, user %s)", host, username);
 			s = callbacks.sshauth_password(username, host);
-			if (libssh2_userauth_password(retval->ssh_session, username, s) != 0) {
+			if (!s || libssh2_userauth_password(retval->ssh_session, username, s) != 0) {
+				err_msg = NULL;
+				if (s) {
+					memset(s, 0, strlen(s));
+					libssh2_session_last_error(retval->ssh_session, &err_msg, NULL, 0);
+				}
+				VERB("Authentication failed (%s)", err_msg ? err_msg : "");
+			} else {
 				memset(s, 0, strlen(s));
-				libssh2_session_last_error(retval->ssh_session, &err_msg, NULL, 0);
-				VERB("Authentication failed (%s)", err_msg);
 			}
-			memset(s, 0, strlen(s));
 			free(s);
 			break;
 		case NC_SSH_AUTH_INTERACTIVE:
@@ -345,14 +317,17 @@ struct nc_session *nc_session_connect_libssh2_socket(const char* username, const
 			break;
 		case NC_SSH_AUTH_PUBLIC_KEYS:
 			VERB ("Publickey athentication");
-			/* if publickeys path not provided, try to find them in standard path */
-			if (callbacks.publickey_filename[0] == NULL || callbacks.privatekey_filename[0] == NULL) {
-				VERB ("No key pair specified. Looking for some in the standard SSH path.");
-				if (find_ssh_keys ()) {
-					VERB("Searching for keys failed.");
-					/* error */
+
+			for (j = 0; j < SSH2_KEYS; ++j) {
+				if (callbacks.publickey_filename[j] != NULL && callbacks.privatekey_filename[j] != NULL) {
 					break;
 				}
+			}
+
+			/* if publickeys path not provided, we cannot continue */
+			if (j == SSH2_KEYS) {
+				VERB("No key pair specified.");
+				break;
 			}
 
 			for (j=0; j<SSH2_KEYS; j++) {
@@ -674,7 +649,11 @@ malformed_msg:
 			return (NULL);
 		}
 
-		nc_session_send_reply(session, NULL, reply);
+		if (nc_session_send_reply(session, NULL, reply) == 0) {
+			ERROR("Unable to send a \'Malformed message\' reply");
+			nc_session_close(session, NC_SESSION_TERM_OTHER);
+			return (NULL);
+		}
 		nc_reply_free(reply);
 	}
 

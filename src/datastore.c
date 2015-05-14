@@ -143,9 +143,10 @@ static struct model_list *models_list = NULL;
 static struct transapi_list* augment_tapi_list = NULL;
 static char** models_dirs = NULL;
 
+static nc_reply* ncds_apply_rpc(ncds_id id, const struct nc_session* session, const nc_rpc* rpc);
 static char* get_state_nacm(const char* UNUSED(model), const char* UNUSED(running), struct nc_err ** UNUSED(e));
 static char* get_state_monitoring(const char* UNUSED(model), const char* UNUSED(running), struct nc_err ** UNUSED(e));
-static int get_model_info(xmlXPathContextPtr model_ctxt, char **name, char **version, char **namespace, char **prefix, char ***rpcs, char ***notifs);
+static int get_model_info(xmlXPathContextPtr model_ctxt, char **name, char **version, char **ns, char **prefix, char ***rpcs, char ***notifs);
 static struct data_model* get_model(const char* module, const char* version);
 static int ncds_features_parse(struct data_model* model);
 static int ncds_update_uses_groupings(struct data_model* model);
@@ -314,7 +315,7 @@ int ncds_sysinit(int flags)
 			NULL, /* notifications */
 #endif
 			NULL, /* ietf-netconf-with-defaults */
-			NC_WORKINGDIR_PATH"/ietf-netconf-acm-data.rng" /* NACM RelaxNG schema */
+			NC_WORKINGDIR_PATH"/ietf-netconf-acm-config.rng" /* NACM RelaxNG schema */
 	};
 	char* schematron_validators[INTERNAL_DS_COUNT] = {
 			NULL, /* ietf-inet-types */
@@ -625,7 +626,9 @@ static int fmon_cp_file(const char* source, const char* target, uint8_t type)
 		close(source_fd);
 		return 1;
 	}
-	fchown(target_fd, uid, gid);
+	if (fchown(target_fd, uid, gid) != 0) {
+		WARN("Failed to change owner of \"%s\" (%s).", target, strerror(errno));
+	}
 	fchmod(target_fd, mode); /* if not created, but rewriting some existing file */
 
 	for (;;) {
@@ -642,7 +645,10 @@ static int fmon_cp_file(const char* source, const char* target, uint8_t type)
 			}
 			break;
 		}
-		write(target_fd, buf, r);
+		if (write(target_fd, buf, r) < r) {
+			ERROR("Writing into file \"%s\" failed (%s).", target, strerror(errno));
+			break;
+		}
 	}
 	close(source_fd);
 	close(target_fd);
@@ -657,7 +663,9 @@ static int fmon_restore_file(const char* target)
 
 	assert(target);
 
-	asprintf(&source, "%s.netconf", target);
+	if (asprintf(&source, "%s.netconf", target) != 0) {
+		return 1;
+	}
 	ret = fmon_cp_file(source, target, 1);
 	free(source);
 
@@ -671,7 +679,9 @@ static int fmon_backup_file(const char* source)
 
 	assert(source);
 
-	asprintf(&target, "%s.netconf", source);
+	if (asprintf(&target, "%s.netconf", source) != 0) {
+		return 1;
+	}
 	ret = fmon_cp_file(source, target, 0);
 	free(target);
 
@@ -1078,7 +1088,7 @@ API const char* ncds_get_model_path(ncds_id id)
 	return (datastore->data_model->path);
 }
 
-API int ncds_model_info(const char *path, char **name, char **version, char **namespace, char **prefix, char ***rpcs, char ***notifs)
+API int ncds_model_info(const char *path, char **name, char **version, char **ns, char **prefix, char ***rpcs, char ***notifs)
 {
 	int retval;
 	xmlXPathContextPtr model_ctxt;
@@ -1102,7 +1112,7 @@ API int ncds_model_info(const char *path, char **name, char **version, char **na
 		return (EXIT_FAILURE);
 	}
 
-	retval = get_model_info(model_ctxt, name, version, namespace, prefix, rpcs, notifs);
+	retval = get_model_info(model_ctxt, name, version, ns, prefix, rpcs, notifs);
 
 	xmlFreeDoc(model_xml);
 	xmlXPathFreeContext(model_ctxt);
@@ -1110,7 +1120,7 @@ API int ncds_model_info(const char *path, char **name, char **version, char **na
 	return (retval);
 }
 
-static int get_model_info(xmlXPathContextPtr model_ctxt, char **name, char **version, char **namespace, char **prefix, char ***rpcs, char ***notifs)
+static int get_model_info(xmlXPathContextPtr model_ctxt, char **name, char **version, char **ns, char **prefix, char ***rpcs, char ***notifs)
 {
 	xmlXPathObjectPtr result = NULL;
 	xmlChar *xml_aux;
@@ -1118,7 +1128,7 @@ static int get_model_info(xmlXPathContextPtr model_ctxt, char **name, char **ver
 
 	if (notifs) {*notifs = NULL;}
 	if (rpcs) {*rpcs = NULL;}
-	if (namespace) { *namespace = NULL;}
+	if (ns) { *ns = NULL;}
 	if (prefix) { *prefix = NULL;}
 	if (name) {*name = NULL;}
 	if (version) {*version = NULL;}
@@ -1181,24 +1191,24 @@ static int get_model_info(xmlXPathContextPtr model_ctxt, char **name, char **ver
 	}
 
 	/* get namespace of the schema */
-	if (namespace != NULL ) {
+	if (ns != NULL ) {
 		result = xmlXPathEvalExpression (BAD_CAST "/yin:module/yin:namespace", model_ctxt);
 		if (result != NULL ) {
 			if (result->nodesetval->nodeNr < 1) {
 				xmlXPathFreeObject (result);
 				goto errorcleanup;
 			} else {
-				*namespace = (char*) xmlGetProp (result->nodesetval->nodeTab[0], BAD_CAST "uri");
+				*ns = (char*) xmlGetProp (result->nodesetval->nodeTab[0], BAD_CAST "uri");
 			}
 			xmlXPathFreeObject (result);
-			if (*namespace == NULL ) {
+			if (*ns == NULL ) {
 				goto errorcleanup;
 			}
 		}
 	}
 
 	/* get prefix of the schema */
-	if (namespace != NULL ) {
+	if (ns != NULL ) {
 		result = xmlXPathEvalExpression (BAD_CAST "/yin:module/yin:prefix", model_ctxt);
 		if (result != NULL ) {
 			if (result->nodesetval->nodeNr < 1) {
@@ -1266,8 +1276,8 @@ errorcleanup:
 	*name = NULL;
 	xmlFree(*version);
 	*version = NULL;
-	xmlFree(*namespace);
-	*namespace = NULL;
+	xmlFree(*ns);
+	*ns = NULL;
 	xmlFree(*prefix);
 	*prefix = NULL;
 	if (*rpcs != NULL) {
@@ -1340,7 +1350,9 @@ char** get_schemas_capabilities(struct nc_cpblts *cpblts)
 						}
 					}
 
-					asprintf(&auxstr, "%s%s%s", retval[i], comma, listitem->model->features[j]->name);
+					if (asprintf(&auxstr, "%s%s%s", retval[i], comma, listitem->model->features[j]->name) == -1) {
+						ERROR("asprintf() failed (%s:%d)", __FILE__, __LINE__);
+					}
 					free(retval[i]);
 					retval[i] = auxstr;
 					auxstr = NULL;
@@ -1944,6 +1956,12 @@ API struct ncds_ds* ncds_new_transapi_static(NCDS_TYPE type, const char* model_p
 		ERROR("%s: Missing transAPI module description.", __func__);
 		return (NULL);
 	}
+
+	if (transapi->version != TRANSAPI_VERSION) {
+		ERROR("%s: Wrong transAPI static module version (version %d is required).", __func__, TRANSAPI_VERSION);
+		return (NULL);
+	}
+
 	if (transapi->config_modified == NULL) {
 		ERROR("%s: Missing config_modified variable in transAPI module description.", __func__);
 		return (NULL);
@@ -2397,6 +2415,12 @@ static int import_groupings(const char* module_name, xmlXPathContextPtr model_ct
 			model = get_model(module, revision);
 			free(revision);
 			if (model == NULL) {
+				if (strcmp(module, "ietf-netconf-acm") == 0) {
+					WARN("NACM turned off, module \'ietf-netconf-acm\' is not available for import from \'%s\'.", module_name);
+					free(module);
+					free(prefix);
+					continue;
+				}
 				ERROR("Missing YIN module \'%s\' imported from \'%s\'.", module, module_name);
 				free(module);
 				free(prefix);
@@ -2476,13 +2500,15 @@ static int import_groupings(const char* module_name, xmlXPathContextPtr model_ct
 	return (EXIT_SUCCESS);
 }
 
-static int ncds_update_uses(const char* module_name, xmlXPathContextPtr *model_ctxt, const char* query)
+static int ncds_update_uses(const char *module_name, const char *prefix,
+		                    xmlXPathContextPtr *model_ctxt, const char* query)
 {
 	xmlXPathObjectPtr uses, groupings = NULL;
 	xmlDocPtr doc;
 	xmlNodePtr node, nodenext;
-	char *grouping_ref, *grouping_name;
+	char *grouping_ref, *grouping_name, *aux;
 	int i, j, flag = 0;
+	size_t prefix_len = strlen(prefix);
 
 	if (model_ctxt == NULL || *model_ctxt == NULL || query == NULL) {
 		ERROR("%s: invalid parameter.", __func__);
@@ -2526,8 +2552,17 @@ static int ncds_update_uses(const char* module_name, xmlXPathContextPtr *model_c
 			/*
 			 * we can process even references with prefix, because we
 			 * already added imported groupings with changing their name
-			 * to include prefix
+			 * to include prefix. The only thing we have to fix is references
+			 * to local groupings with prefix - such groupings are not imported
+			 * so the prefix was not added to their name and they can be (and
+			 * usually they are) referenced without prefix.
 			 */
+			if (!strncmp(grouping_ref, prefix, prefix_len) && grouping_ref[prefix_len] == ':') {
+				aux = grouping_ref;
+				grouping_ref = strdup(&aux[prefix_len + 1]);
+				free(aux);
+			}
+
 			for (j = 0; j < groupings->nodesetval->nodeNr; j++) {
 				grouping_name = (char*) xmlGetProp(groupings->nodesetval->nodeTab[j], BAD_CAST "name");
 				if (strcmp(grouping_name, grouping_ref) == 0) {
@@ -2614,7 +2649,7 @@ static int ncds_update_uses_groupings(struct data_model* model)
 	}
 
 	query = "/"NC_NS_YIN_ID":module//"NC_NS_YIN_ID":grouping//"NC_NS_YIN_ID":uses";
-	return(ncds_update_uses(model->name, &(model->ctxt), query));
+	return(ncds_update_uses(model->name, model->prefix, &(model->ctxt), query));
 }
 
 static int ncds_update_uses_augments(struct data_model* model)
@@ -2627,7 +2662,7 @@ static int ncds_update_uses_augments(struct data_model* model)
 	}
 
 	query = "//"NC_NS_YIN_ID":augment//"NC_NS_YIN_ID":uses";
-	return(ncds_update_uses(model->name, &(model->ctxt), query));
+	return(ncds_update_uses(model->name, model->prefix, &(model->ctxt), query));
 }
 
 static int ncds_update_uses_ds(struct ncds_ds* datastore)
@@ -2660,7 +2695,8 @@ static int ncds_update_uses_ds(struct ncds_ds* datastore)
 	}
 
 	query = "/"NC_NS_YIN_ID":module//"NC_NS_YIN_ID":uses";
-	ret = ncds_update_uses(datastore->data_model->name, &model_ctxt, query);
+	ret = ncds_update_uses(datastore->data_model->name,
+			               datastore->data_model->prefix, &model_ctxt, query);
 	xmlXPathFreeContext(model_ctxt);
 
 	return (ret);
@@ -2828,12 +2864,16 @@ static xmlNodePtr model_node_path(xmlNodePtr current, const char* current_prefix
 		if (*ds == NULL) {
 			/* locate corresponding datastore - we are at the beginning of the path */
 			module = NULL;
-			if (prefix == NULL) {
+			if (prefix == NULL || !strcmp(prefix, current_prefix)) {
 				/* model is augmenting itself - get the module's name to be able to find it */
 				module = (char*) xmlGetProp(xmlDocGetRootElement(current->doc), BAD_CAST "name");
 			} else { /* (prefix != NULL) */
 				/* find the prefix in imports */
 				module = get_module_with_prefix(prefix, imports);
+			}
+			if (module == NULL ) {
+				/* unknown name of the module to augment */
+				return (NULL);
 			}
 
 			/* locate the correct datastore to augment */
@@ -2905,7 +2945,7 @@ static xmlNodePtr model_node_path(xmlNodePtr current, const char* current_prefix
 					}
 					/* some augment found, now check it */
 					free(module_inpath);
-					module_inpath = (char*) xmlGetNsProp(path_node, BAD_CAST "module", BAD_CAST "libnetconf");
+					module_inpath = (char*) xmlGetNsProp(node, BAD_CAST "module", BAD_CAST "libnetconf");
 
 					path_node = node->children;
 					match = match_module_node(module_inpath, module, name, &path_node);
@@ -2938,14 +2978,19 @@ static xmlNodePtr model_node_path(xmlNodePtr current, const char* current_prefix
  *  'absolute' 0
  *  'relative' 1
  *  'both'
+ *
+ * return:
+ *  error       -1
+ *  no changes  0
+ *  some change 1
  */
 static int _update_model(int type, xmlXPathContextPtr model_ctxt, const char* model_prefix, const char* model_name, const char* model_ns, struct transapi_internal* aug_transapi, int path_type)
 {
 	xmlXPathObjectPtr imports = NULL, nodes = NULL;
 	xmlNodePtr node, node_aux, path_node;
 	xmlNsPtr ns;
-	int i;
-	char *path;
+	int i, ret = 0;
+	char *path, *resolved_path, *to_resolve_path;
 	struct ncds_ds* ds = NULL;
 
 	/* get all definitions of nodes to modify */
@@ -2957,14 +3002,14 @@ static int _update_model(int type, xmlXPathContextPtr model_ctxt, const char* mo
 		nodes = xmlXPathEvalExpression(BAD_CAST "//"NC_NS_YIN_ID":refine", model_ctxt);
 		break;
 	default: /* wtf */
-		return (EXIT_FAILURE);
+		return (-1);
 	}
 
 	if (nodes != NULL ) {
 		if (xmlXPathNodeSetIsEmpty(nodes->nodesetval)) {
 			/* there is no element modifying the model so we have nothing to do */
 			xmlXPathFreeObject(nodes);
-			return (EXIT_SUCCESS);
+			return (0);
 		}
 	} else {
 		ERROR("%s: Evaluating XPath expression failed.", __func__);
@@ -2974,7 +3019,7 @@ static int _update_model(int type, xmlXPathContextPtr model_ctxt, const char* mo
 	/* get all <import> nodes for their prefix specification to be used with augment statement */
 	if ((imports = xmlXPathEvalExpression(BAD_CAST "/"NC_NS_YIN_ID":module/"NC_NS_YIN_ID":import", model_ctxt)) == NULL ) {
 		ERROR("%s: Evaluating XPath expression failed.", __func__);
-		return (EXIT_FAILURE);
+		return (-1);
 	}
 
 	/* process all modifying nodes from this model */
@@ -2993,11 +3038,31 @@ static int _update_model(int type, xmlXPathContextPtr model_ctxt, const char* mo
 			continue;
 		}
 
+		to_resolve_path = strdup(path);
 		path_node = model_node_path(nodes->nodesetval->nodeTab[i], model_prefix, model_name, path, imports, &ds);
+		free(path);
 		if (path_node != NULL) {
 			/* path is correct, process the requested modification */
 			switch (type) {
 			case 1: /* augment */
+
+				/* check whether this augment was not already resolved */
+				for (node_aux = path_node->children; node_aux != NULL; node_aux = node_aux->next) {
+					if (xmlStrcmp(node_aux->name, BAD_CAST "augment") == 0) {
+						resolved_path = (char*) xmlGetProp (node_aux, BAD_CAST "target-node");
+						if (strcmp(to_resolve_path, resolved_path) == 0) {
+							free(resolved_path);
+							break;
+						}
+						free(resolved_path);
+					}
+				}
+
+				if (node_aux != NULL) {
+					/* already resolved */
+					break;
+				}
+
 				xmlAddChild(path_node, node = xmlCopyNode(nodes->nodesetval->nodeTab[i], 1));
 				ns = xmlNewNs(node, BAD_CAST "libnetconf", BAD_CAST "libnetconf");
 				xmlSetNsProp(node, ns, BAD_CAST "module", BAD_CAST model_name);
@@ -3010,6 +3075,9 @@ static int _update_model(int type, xmlXPathContextPtr model_ctxt, const char* mo
 				if (path_type == 0 && aug_transapi != NULL) {
 					ncds_transapi_enlink(ds, aug_transapi);
 				}
+
+				/* remember the change */
+				ret = 1;
 				break;
 			case 2: /* refine */
 				for (node = nodes->nodesetval->nodeTab[i]->children; node != NULL; node = node->next) {
@@ -3036,24 +3104,26 @@ static int _update_model(int type, xmlXPathContextPtr model_ctxt, const char* mo
 				xmlFreeNode(nodes->nodesetval->nodeTab[i]);
 				nodes->nodesetval->nodeTab[i] = NULL;
 
+				/* remember the change */
+				ret = 1;
 				break;
 			default: /* wtf */
-				return (EXIT_FAILURE);
+				return (-1);
 			}
 		}
-		free(path);
+		free(to_resolve_path);
 	}
 	xmlXPathFreeObject(nodes);
 	xmlXPathFreeObject(imports);
 
-	return (EXIT_SUCCESS);
+	return (ret);
 
 error_cleanup:
 
 	xmlXPathFreeObject(imports);
 	xmlXPathFreeObject(nodes);
 
-	return (EXIT_FAILURE);
+	return (-1);
 }
 
 static int ncds_update_refine(struct ncds_ds *ds)
@@ -3571,7 +3641,7 @@ static int ncds_update_callbacks(struct ncds_ds* ds)
 	char buffer[PREFIX_BUFFER_SIZE];
 
 #define MAPPING_SIZE 26+1 /* # of letters used as prefixes + terminating item */
-	char ext_ns_mapping_buffer[3] = {' ',':','\0'};
+	char ext_ns_mapping_buffer[4] = {'/', ' ',':','\0'};
 	struct ns_pair ext_ns_mapping[MAPPING_SIZE] = {
 			{"A",NULL},{"B",NULL},{"C",NULL},{"D",NULL},{"E",NULL},{"F",NULL},
 			{"G",NULL},{"H",NULL},{"I",NULL},{"J",NULL},{"K",NULL},{"L",NULL},{"M",NULL},
@@ -3640,17 +3710,18 @@ static int ncds_update_callbacks(struct ncds_ds* ds)
 
 				path_aux = path;
 				len = strlen(tapi_iter->tapi->ns_mapping[k].prefix);
-				if (len >= PREFIX_BUFFER_SIZE) {
+				if (len+1 >= PREFIX_BUFFER_SIZE) {
 					ERROR("Namespace prefix \'%s\' is too long. libnetconf is able to process prefixes up to %d characters.",
 							tapi_iter->tapi->ns_mapping[k].prefix, PREFIX_BUFFER_SIZE - 1);
 					free(path);
 					return (EXIT_FAILURE);
 				}
 				/* magic */
-				strcpy(buffer, tapi_iter->tapi->ns_mapping[k].prefix);
-				buffer[len] = ':';
-				buffer[len+1] = '\0';
-				ext_ns_mapping_buffer[0] = ext_ns_mapping[l].prefix[0];
+				buffer[0] = '/';
+				strcpy(buffer+1, tapi_iter->tapi->ns_mapping[k].prefix);
+				buffer[len+1] = ':';
+				buffer[len+2] = '\0';
+				ext_ns_mapping_buffer[1] = ext_ns_mapping[l].prefix[0];
 				path = nc_str_replace(path_aux, buffer, ext_ns_mapping_buffer);
 				free(path_aux);
 			}
@@ -3723,6 +3794,7 @@ static void transapis_cleanup(struct transapi_list **list, int force)
 
 API int ncds_consolidate(void)
 {
+	int ret, changes;
 	struct ncds_ds_list *ds_iter;
 	struct model_list* listitem;
 	struct transapi_list *tapi_iter;
@@ -3753,15 +3825,24 @@ API int ncds_consolidate(void)
 	}
 
 	/* augment statement processing - absolute paths to modify other (datastore's extended models) data models */
-	for (listitem = models_list; listitem != NULL; listitem = listitem->next) {
-		if (listitem->model != NULL && ncds_update_augment_absolute(listitem->model) != EXIT_SUCCESS) {
-			ERROR("Augmenting configuration data models failed.");
-			return (EXIT_FAILURE);
+	do {
+		ret = 0;
+		changes = 0;
+		for (listitem = models_list; listitem != NULL; listitem = listitem->next) {
+			if (listitem->model != NULL && (ret = ncds_update_augment_absolute(listitem->model)) == -1) {
+				ERROR("Augmenting configuration data models failed.");
+				return (EXIT_FAILURE);
+			}
+
+			if (ret == 1) {
+				changes = 1;
+			}
 		}
-	}
+	} while (changes);
+
 	/* augment statement processing - relative paths to modify always the data model (datastore's extended model) itself */
 	for (ds_iter = ncds.datastores; ds_iter != NULL; ds_iter = ds_iter->next) {
-		if (ds_iter->datastore->ext_model != NULL && ncds_update_augment_relative(ds_iter->datastore) != EXIT_SUCCESS) {
+		if (ds_iter->datastore->ext_model != NULL && ncds_update_augment_relative(ds_iter->datastore) == -1) {
 			ERROR("Augmenting configuration data models failed.");
 			return (EXIT_FAILURE);
 		}
@@ -3822,9 +3903,10 @@ static int is_model_root(xmlNodePtr root, struct data_model *data_model)
 	}
 }
 
-static xmlDocPtr read_datastore_data(const char *data)
+static xmlDocPtr read_datastore_data(ncds_id id, const char *data)
 {
 	char *config = NULL;
+	const char *datap = data;
 	xmlDocPtr doc, ret = NULL;
 	xmlNodePtr node;
 
@@ -3832,7 +3914,22 @@ static xmlDocPtr read_datastore_data(const char *data)
 		/* config is empty */
 		return xmlNewDoc (BAD_CAST "1.0");
 	} else {
-		if (asprintf(&config, "<config>%s</config>", data) == -1) {
+		if (strncmp(data, "<?xml", 5) == 0) {
+			/* We got a "real" XML document. We strip off the
+			 * declaration, so the thing below works.
+			 *
+			 * We just skip it and use the rest of the xml. Data are untouched.
+			 */
+			datap = index(data, '>');
+			if (datap == NULL) {
+				/* content is corrupted */
+				ERROR("Invalid datastore configuration data (datastore %d).", id);
+				return (NULL);
+			}
+			++datap;
+		}
+
+		if (asprintf(&config, "<config>%s</config>", datap) == -1) {
 			ERROR("asprintf() failed (%s:%d).", __FILE__, __LINE__);
 			return (NULL);
 		}
@@ -3841,7 +3938,7 @@ static xmlDocPtr read_datastore_data(const char *data)
 
 		if (doc == NULL || doc->children == NULL) {
 			xmlFreeDoc(doc);
-			ERROR("Invalid datastore configuration data.");
+			ERROR("Invalid datastore configuration data (datastore %d).", id);
 			return (NULL);
 		}
 
@@ -4043,9 +4140,8 @@ static int validate_ds(struct ncds_ds *ds, xmlDocPtr doc, struct nc_err **error)
 static int apply_rpc_validate_(struct ncds_ds* ds, const struct nc_session* session, NC_DATASTORE source, const char* config, struct nc_err** e)
 {
 	int ret = EXIT_FAILURE;
-	int len;
-	char *data_cfg = NULL, *data_stat, *model;
-	xmlDocPtr doc_cfg, doc_status = NULL, doc = NULL;
+	char *data_cfg = NULL;
+	xmlDocPtr doc = NULL;
 	xmlNodePtr root, node;
 	xmlNsPtr ns;
 
@@ -4083,60 +4179,15 @@ static int apply_rpc_validate_(struct ncds_ds* ds, const struct nc_session* sess
 		return (EXIT_FAILURE);
 	}
 
-	doc = read_datastore_data(data_cfg);
+	doc = read_datastore_data(ds->id, data_cfg);
 	if (doc == NULL || doc->children == NULL) {
 		/* config is empty */
 		xmlFreeDoc(doc);
 		doc = NULL;
 	}
-
 	if (source != NC_DATASTORE_CONFIG) {
-		/* standard datastores, so add status data */
-		if (ds->get_state != NULL) {
-			xmlDocDumpMemory(ds->ext_model, (xmlChar**) (&model), &len);
-			data_stat = ds->get_state(model, data_cfg, e);
-			free(model);
-
-			if (*e != NULL) {
-				/* state data retrieval error */
-				free(data_stat);
-				free(data_cfg);
-				xmlFreeDoc(doc);
-				return (EXIT_FAILURE);
-			}
-
-			doc_status = xmlReadDoc(BAD_CAST data_stat, NULL, NULL, NC_XMLREAD_OPTIONS);
-			free(data_stat);
-		} else if (ds->get_state_xml != NULL) {
-			doc_status = ds->get_state_xml(ds->ext_model, doc, e);
-
-			if (*e != NULL) {
-				/* state data retrieval error */
-				free(data_cfg);
-				xmlFreeDoc(doc);
-				return (EXIT_FAILURE);
-			}
-		}
 		free(data_cfg);
-
-		if (doc == NULL) {
-			/* there are no configuration data, use only status, no merge is needed */
-			doc = doc_status;
-		} else {
-			/* merge config and status data */
-			doc_cfg = doc;
-			if ((doc = ncxml_merge(doc_cfg, doc_status, ds->ext_model)) == NULL) {
-				xmlFreeDoc(doc_cfg);
-				xmlFreeDoc(doc_status);
-				*e = nc_err_new(NC_ERR_OP_FAILED);
-				return (EXIT_FAILURE);
-			}
-			/* cleanup */
-			xmlFreeDoc(doc_cfg);
-			xmlFreeDoc(doc_status);
-		}
 	}
-
 
 	if (!doc) {
 		/*
@@ -4145,19 +4196,23 @@ static int apply_rpc_validate_(struct ncds_ds* ds, const struct nc_session* sess
 		 */
 		ret = EXIT_SUCCESS;
 	} else {
-		/* process default values */
-		ncdflt_default_values(doc, ds->ext_model, NCWD_MODE_ALL);
-
 		/*
 		 * reconnect root elements from datastore data under the <data>
 		 * element required by validators
 		 */
-		root = xmlNewNode(NULL, BAD_CAST "data");
+		root = xmlNewNode(NULL, BAD_CAST "config");
 		ns = xmlNewNs(root, (xmlChar *) NC_NS_BASE10, NULL);
 		xmlSetNs(root, ns);
 		for (node = doc->children; node != NULL; node = doc->children) {
 			xmlUnlinkNode(node);
-			xmlAddChild(root, node);
+
+			/* keep only data relevant to this datastore module */
+			if (node->ns && node->ns->href &&
+					!strcmp(ds->data_model->ns, (char*) node->ns->href)) {
+				xmlAddChild(root, node);
+			} else {
+				xmlFreeNode(node);
+			}
 		}
 		xmlDocSetRootElement(doc, root);
 
@@ -4356,7 +4411,7 @@ static struct ncds_ds* ncds_new_internal(NCDS_TYPE type, const char * model_path
 		}
 	}
 #ifndef DISABLE_VALIDATION
-	if (asprintf(&path_rng, "%s-data.rng", basename) == -1) {
+	if (asprintf(&path_rng, "%s-config.rng", basename) == -1) {
 		ERROR("asprintf() failed (%s:%d).", __FILE__, __LINE__);
 		path_rng = NULL;
 	}
@@ -4729,7 +4784,7 @@ static xmlDocPtr ncxml_merge(const xmlDocPtr first, const xmlDocPtr second, cons
 
 	/* return NULL if both docs are NULL, or the other doc in case on of them is NULL */
 	if (first == NULL) {
-		return (xmlCopyDoc(second, 1));
+		return (second ? xmlCopyDoc(second, 1) : NULL);
 	} else if (second == NULL) {
 		return (xmlCopyDoc(first, 1));
 	}
@@ -4816,7 +4871,8 @@ static int ncxml_subtree_filter(xmlNodePtr config, xmlNodePtr filter)
 	/* check if this filter level is last */
 	filter_node = filter;
 	while (filter_node) {
-		if ((filter_node->children) && (filter_node->children->type == XML_TEXT_NODE)) {
+		if ((filter_node->children) && (filter_node->children->type == XML_TEXT_NODE) &&
+				!xmlIsBlankNode(filter_node->children)) {
 			end_node = 1;
 			break;
 		}
@@ -4877,7 +4933,8 @@ static int ncxml_subtree_filter(xmlNodePtr config, xmlNodePtr filter)
 						filter_node = filter;
 						/* pass all filter sibling nodes */
 						while (sibling_selection == 0 && filter_node) {
-							if (!filter_node->children || (filter_node->children->type != XML_TEXT_NODE)) {
+							if (!filter_node->children || (filter_node->children->type != XML_TEXT_NODE) ||
+									xmlIsBlankNode(filter_node->children)) {
 								sibling_selection = 1; /* filter result will be selected */
 								break;
 							}
@@ -4897,8 +4954,8 @@ static int ncxml_subtree_filter(xmlNodePtr config, xmlNodePtr filter)
 								if (!strcmp((char *) filter_node->name, (char *) config_node->name) &&
 										!nc_nscmp(filter_node, config_node) && !attrcmp(filter_node, config_node)) {
 									/* content match node check */
-									if (filter_node->children && (filter_node->children->type == XML_TEXT_NODE) &&
-											config_node->children && (config_node->children->type == XML_TEXT_NODE)) {
+									if (filter_node->children && (filter_node->children->type == XML_TEXT_NODE) && !xmlIsBlankNode(filter_node->children) &&
+											config_node->children && (config_node->children->type == XML_TEXT_NODE) && !xmlIsBlankNode(config_node->children)) {
 										/* get filter's text node content ignoring whitespaces */
 										if ((content2 = nc_clrwspace((char *) filter_node->children->content)) == NULL ||
 												(content1 = nc_clrwspace((char *) config_node->children->content)) == NULL) {
@@ -4973,7 +5030,7 @@ static int ncxml_subtree_filter(xmlNodePtr config, xmlNodePtr filter)
 		}
 
 		if (filter_in == 1) {
-			while (config->children && filter_node && filter_node->children &&
+			while (config->children && filter_node && filter_node->children && !xmlIsBlankNode(filter_node->children) &&
 					((filter_in = ncxml_subtree_filter(config->children, filter_node->children)) == 0)) {
 				filter_node = filter_node->next;
 				while (filter_node) {
@@ -5186,7 +5243,7 @@ static nc_reply* ncds_apply_transapi(struct ncds_ds* ds, const struct nc_session
 
 	/* find differences and call functions */
 	new_data = ds->func.getconfig(ds, session, NC_DATASTORE_RUNNING, &e);
-	new = read_datastore_data(new_data);
+	new = read_datastore_data(ds->id, new_data);
 	free(new_data);
 
 	/* add default values */
@@ -5324,14 +5381,30 @@ static int rpc_get_prefilter(struct nc_filter **filter, const struct ncds_ds* ds
 	return (retval);
 }
 
-API nc_reply* ncds_apply_rpc(ncds_id id, const struct nc_session* session, const nc_rpc* rpc)
+/**
+ * @ingroup store
+ * @brief Perform the requested RPC operation on the datastore.
+ *
+ * @param[in] id Datastore ID. Use #NCDS_INTERNAL_ID (0) to apply request
+ * (typically \<get\>) onto the libnetconf's internal datastore.
+ * @param[in] session NETCONF session (a dummy session is acceptable) where the
+ * \<rpc\> came from. Capabilities checks are done according to this session.
+ * @param[in] rpc NETCONF \<rpc\> message specifying requested operation.
+ * @return NULL in case of a non-NC_RPC_DATASTORE_* operation type or invalid
+ * parameter session or rpc, else \<rpc-reply\> with \<ok\>, \<data\> or
+ * \<rpc-error\> according to the type and the result of the requested
+ * operation. When the requested operation is not applicable to the specified
+ * datastore (e.g. the namespace does not match), NCDS_RPC_NOT_APPLICABLE
+ * is returned.
+ */
+static nc_reply* ncds_apply_rpc(ncds_id id, const struct nc_session* session, const nc_rpc* rpc)
 {
 	struct nc_err* e = NULL;
 	struct ncds_ds* ds = NULL;
 	struct nc_filter *filter = NULL;
 	char* data = NULL, *config, *model = NULL, *data2, *op_name;
 	xmlDocPtr doc1, doc2, doc_merged = NULL;
-	int len, dsid, i, j;
+	int len, dsid, i;
 	int ret = EXIT_FAILURE;
 	nc_reply* reply = NULL, *old_reply = NULL, *new_reply;
 	xmlBufferPtr resultbuffer;
@@ -5342,14 +5415,12 @@ API nc_reply* ncds_apply_rpc(ncds_id id, const struct nc_session* session, const
 	NC_DATASTORE source_ds = 0, target_ds = 0;
 	struct nacm_rpc *nacm_aux;
 	nc_rpc *rpc_aux;
-	void * op_input_array;
 	xmlNodePtr op_node;
 	xmlNodePtr op_input;
-	int pos;
 	struct transapi_list* tapi_iter;
 	const char * rpc_name;
 	const char *data_ns = NULL;
-	char *end = NULL, *aux = NULL;
+	char *aux = NULL;
 	NC_EDIT_ERROPT_TYPE erropt;
 #ifndef DISABLE_VALIDATION
 	NC_EDIT_TESTOPT_TYPE testopt;
@@ -5387,7 +5458,7 @@ process_datastore:
 		(nc_rpc_get_target(rpc) == NC_DATASTORE_RUNNING)) {
 
 		old_data = ds->func.getconfig(ds, session, NC_DATASTORE_RUNNING, &e);
-		old = read_datastore_data(old_data);
+		old = read_datastore_data(ds->id, old_data);
 		if (old == NULL) {/* cannot get or parse data */
 			if (e == NULL) { /* error not set */
 				e = nc_err_new(NC_ERR_OP_FAILED);
@@ -5446,7 +5517,7 @@ process_datastore:
 			 * filter completely removes content of this repository, so do not
 			 * continue with the following operations
 			 */
-			data = strdup("");
+			doc_merged = xmlNewDoc(BAD_CAST "1.0");
 			break;
 		}
 
@@ -5462,7 +5533,7 @@ process_datastore:
 			/* caller provided callback function to retrieve status data */
 
 			/* convert configuration data into XML structure */
-			doc1 = read_datastore_data(data);
+			doc1 = read_datastore_data(ds->id, data);
 			if (doc1 == NULL || doc1->children == NULL) {
 				/* empty */
 				xmlFreeDoc(doc1);
@@ -5476,7 +5547,7 @@ process_datastore:
 				/* status data are provided as string, convert it into XML structure */
 				xmlDocDumpMemory(ds->ext_model, (xmlChar**) (&model), &len);
 				data2 = ds->get_state(model, data, &e);
-				doc2 = read_datastore_data(data2);
+				doc2 = read_datastore_data(ds->id, data2);
 				if (doc2 == NULL || doc2->children == NULL) {
 					/* empty */
 					xmlFreeDoc(doc2);
@@ -5518,21 +5589,7 @@ process_datastore:
 				xmlFreeDoc(doc2);
 			}
 		} else {
-			if (strncmp(data, "<?xml", 5) == 0) {
-				/* We got a "real" XML document. We strip off the
-				 * declaration, so the thing below works.
-				 *
-				 * We just replace that with whitespaces, which is
-				 * harmless, but we'll free the correct pointer.
-				 */
-				end = index(data, '>');
-				if (end != NULL) {
-					for (aux = data; aux <= end; aux++) {
-						*aux = ' ';
-					}
-				} /* else content is corrupted that will be detected by xmlReadDoc() */
-			}
-			doc_merged = read_datastore_data(data);
+			doc_merged = read_datastore_data(ds->id, data);
 		}
 		free(data);
 
@@ -5551,14 +5608,6 @@ process_datastore:
 		/* NACM */
 		nacm_check_data_read(doc_merged, rpc->nacm);
 
-		/* dump the result */
-		resultbuffer = xmlBufferCreate();
-		if (resultbuffer == NULL) {
-			ERROR("%s: xmlBufferCreate failed (%s:%d).", __func__, __FILE__, __LINE__);
-			e = nc_err_new(NC_ERR_OP_FAILED);
-			break;
-		}
-
 		/* if filter specified, now is good time to apply it */
 		node = NULL;
 		if (doc_merged->children != NULL) {
@@ -5568,23 +5617,14 @@ process_datastore:
 					e = nc_err_new(NC_ERR_BAD_ELEM);
 					nc_err_set(e, NC_ERR_PARAM_TYPE, "protocol");
 					nc_err_set(e, NC_ERR_PARAM_INFO_BADELEM, "filter");
-					xmlBufferFree(resultbuffer);
 					xmlFreeDoc(doc_merged);
 					break;
 				}
-			} else {
-				node = xmlCopyNodeList(doc_merged->children);
+				xmlFreeDoc(doc_merged);
+				doc_merged = xmlNewDoc(BAD_CAST "1.0");
+				xmlAddChildList((xmlNodePtr)doc_merged, node);
 			}
 		}
-		for (aux_node = node; aux_node != NULL; aux_node = aux_node->next) {
-			if (aux_node != NULL) {
-				xmlNodeDump(resultbuffer, NULL, aux_node, 2, 1);
-			}
-		}
-		xmlFreeNodeList(node);
-		data = strdup((char *) xmlBufferContent(resultbuffer));
-		xmlBufferFree(resultbuffer);
-		xmlFreeDoc(doc_merged);
 
 		break;
 	case NC_OP_GETCONFIG:
@@ -5594,7 +5634,7 @@ process_datastore:
 			 * filter completely removes content of this repository, so do not
 			 * continue with the following operations
 			 */
-			data = strdup("");
+			doc_merged = xmlNewDoc(BAD_CAST "1.0");
 			break;
 		}
 
@@ -5605,7 +5645,7 @@ process_datastore:
 			}
 			break;
 		}
-		doc_merged = read_datastore_data(data);
+		doc_merged = read_datastore_data(ds->id, data);
 		free(data);
 
 		if (doc_merged == NULL) {
@@ -5623,14 +5663,6 @@ process_datastore:
 		/* NACM */
 		nacm_check_data_read(doc_merged, rpc->nacm);
 
-		/* dump the result */
-		resultbuffer = xmlBufferCreate();
-		if (resultbuffer == NULL) {
-			ERROR("%s: xmlBufferCreate failed (%s:%d).", __func__, __FILE__, __LINE__);
-			e = nc_err_new(NC_ERR_OP_FAILED);
-			break;
-		}
-
 		/* if filter specified, now is good time to apply it */
 		node = NULL;
 		if (doc_merged->children != NULL) {
@@ -5640,31 +5672,20 @@ process_datastore:
 					e = nc_err_new(NC_ERR_BAD_ELEM);
 					nc_err_set(e, NC_ERR_PARAM_TYPE, "protocol");
 					nc_err_set(e, NC_ERR_PARAM_INFO_BADELEM, "filter");
-					xmlBufferFree(resultbuffer);
 					xmlFreeDoc(doc_merged);
 					break;
 				}
-			} else {
-				node = xmlCopyNodeList(doc_merged->children);
+				xmlFreeDoc(doc_merged);
+				doc_merged = xmlNewDoc(BAD_CAST "1.0");
+				xmlAddChildList((xmlNodePtr)doc_merged, node);
 			}
 		}
-		for (aux_node = node; aux_node != NULL; aux_node = aux_node->next) {
-			if (aux_node != NULL) {
-				xmlNodeDump(resultbuffer, NULL, aux_node, 2, 1);
-			}
-		}
-		xmlFreeNodeList(node);
-		data = strdup((char *) xmlBufferContent(resultbuffer));
-		xmlBufferFree(resultbuffer);
-		xmlFreeDoc(doc_merged);
-
 		break;
 	case NC_OP_EDITCONFIG:
 	case NC_OP_COPYCONFIG:
 		if (ds->type == NCDS_TYPE_EMPTY) {
 			/* there is nothing to edit in empty datastore type */
 			ret = EXIT_RPC_NOT_APPLICABLE;
-			data = NULL;
 			break;
 		}
 
@@ -5724,7 +5745,6 @@ process_datastore:
 			config = NULL;
 			doc1 = xmlReadDoc(BAD_CAST data, NULL, NULL, NC_XMLREAD_OPTIONS);
 			free(data);
-			data = NULL;
 
 			if (doc1 == NULL || doc1->children == NULL || doc1->children->children == NULL) {
 				if (doc1 != NULL) {
@@ -5758,7 +5778,6 @@ process_datastore:
 				 * with some data.
 				 */
 				ret = EXIT_RPC_NOT_APPLICABLE;
-				data = NULL;
 				break;
 			}
 
@@ -5851,11 +5870,9 @@ apply_editcopyconfig:
 						e = nc_err_new(NC_ERR_OP_FAILED);
 						nc_err_set(e, NC_ERR_PARAM_MSG, "libnetconf server internal error, see error log.");
 						free(data);
-						data = NULL;
 						break; /* main switch */
 					}
 					free(data);
-					data = NULL;
 				}
 			}
 			if (target_ds == NC_DATASTORE_URL && nc_cpblts_enabled(session, NC_CAP_URL_ID)) {
@@ -5895,7 +5912,7 @@ apply_editcopyconfig:
 					 * remote file, make document from it and add current datastore configuration data to documtent and
 					 * then upload it. Problem is if remote file is not empty (it contains data from datastores we does not have).
 					 * Then data would merge and we will have merged wanted data with non-wanted data from remote file before editing.
-					 * Thats FEATURE, not bug!!!. I reccomend to call ncds_apply_rpc2all and before that use delete-config on remote file.
+					 * Thats FEATURE, not bug!!!. I recommend to call ncds_apply_rpc2all and before that use delete-config on remote file.
 					 */
 					url_tmpfile = -1;
 					if (nc_url_check((char*)url) == 0) {
@@ -5959,9 +5976,8 @@ apply_editcopyconfig:
 						xmlFreeDoc(doc1);
 						break;
 					}
-					doc2 = read_datastore_data(data);
+					doc2 = read_datastore_data(ds->id, data);
 					free(data);
-					data = NULL;
 					if (doc2 == NULL) {
 						if (e == NULL ) {
 							ERROR("%s: Unable to process datastore data (%s:%d).", __func__, __FILE__, __LINE__);
@@ -5977,7 +5993,6 @@ apply_editcopyconfig:
 					xmlDocDumpFormatMemory(doc1, (xmlChar**) (&data), NULL, 1);
 					nc_url_upload(data, (char*) url, &e);
 					free(data);
-					data = NULL;
 					xmlFreeDoc(doc1);
 					xmlFreeDoc(doc2);
 					break;
@@ -6007,19 +6022,11 @@ apply_editcopyconfig:
 		}
 		free(config);
 
-#ifndef DISABLE_NOTIFICATIONS
-		/* log the event */
-		if (dsid == NCDS_INTERNAL_ID && ret == EXIT_SUCCESS && (target_ds == NC_DATASTORE_RUNNING || target_ds == NC_DATASTORE_STARTUP)) {
-			ncntf_event_new(-1, NCNTF_BASE_CFG_CHANGE, target_ds, NCNTF_EVENT_BY_USER, session);
-		}
-#endif /* DISABLE_NOTIFICATIONS */
-
 		break;
 	case NC_OP_DELETECONFIG:
 		if (ds->type == NCDS_TYPE_EMPTY) {
 			/* there is nothing to edit in empty datastore type */
 			ret = EXIT_RPC_NOT_APPLICABLE;
-			data = NULL;
 			break;
 		}
 
@@ -6062,32 +6069,17 @@ apply_editcopyconfig:
 #endif /* DISABLE_URL */
 			ret = ds->func.deleteconfig(ds, session, target_ds, &e);
 		}
-#ifndef DISABLE_NOTIFICATIONS
-		/* log the event */
-		if (dsid == NCDS_INTERNAL_ID && ret == EXIT_SUCCESS && (target_ds == NC_DATASTORE_RUNNING || target_ds == NC_DATASTORE_STARTUP)) {
-			ncntf_event_new(-1, NCNTF_BASE_CFG_CHANGE, target_ds, NCNTF_EVENT_BY_USER, session);
-		}
-#endif /* DISABLE_NOTIFICATIONS */
 
 		break;
 	case NC_OP_COMMIT:
 		if (ds->type == NCDS_TYPE_EMPTY) {
 			/* there is nothing to edit in empty datastore type */
 			ret = EXIT_RPC_NOT_APPLICABLE;
-			data = NULL;
 			break;
 		}
 
 		if (nc_cpblts_enabled (session, NC_CAP_CANDIDATE_ID)) {
 			ret = ds->func.copyconfig (ds, session, rpc, NC_DATASTORE_RUNNING, NC_DATASTORE_CANDIDATE, NULL, &e);
-
-#ifndef DISABLE_NOTIFICATIONS
-			/* log the event */
-			if (dsid == NCDS_INTERNAL_ID && ret == EXIT_SUCCESS) {
-				ncntf_event_new (-1, NCNTF_BASE_CFG_CHANGE, NC_DATASTORE_RUNNING, NCNTF_EVENT_BY_USER, session);
-			}
-#endif /* DISABLE_NOTIFICATIONS */
-
 		} else {
 			e = nc_err_new (NC_ERR_OP_NOT_SUPPORTED);
 			ret = EXIT_FAILURE;
@@ -6097,7 +6089,6 @@ apply_editcopyconfig:
 		if (ds->type == NCDS_TYPE_EMPTY) {
 			/* there is nothing to edit in empty datastore type */
 			ret = EXIT_RPC_NOT_APPLICABLE;
-			data = NULL;
 			break;
 		}
 
@@ -6123,10 +6114,11 @@ apply_editcopyconfig:
 				if ((data = get_schema (rpc, &e)) == NULL) {
 					ret = EXIT_FAILURE;
 				} else {
-					ret = EXIT_SUCCESS;
+					reply = nc_reply_data_ns(data, data_ns);
+					free(data);
 				}
 			} else {
-				data = strdup ("");
+				doc_merged = xmlNewDoc(BAD_CAST "1.0");
 				ret = EXIT_SUCCESS;
 			}
 		} else {
@@ -6150,40 +6142,15 @@ apply_editcopyconfig:
 				/* find matching rpc and call rpc callback function */
 				rpc_name = tapi_iter->tapi->rpc_clbks->callbacks[i].name;
 				if (strcmp(op_name, rpc_name) == 0) {
-					/* create array of input parameters */
-					op_input_array = calloc(tapi_iter->tapi->rpc_clbks->callbacks[i].arg_count, sizeof (xmlNodePtr));
 					/* get operation node */
 					op_node = ncxml_rpc_get_op_content(rpc);
-					op_input = op_node->children;
-					while (op_input) {
-						if (op_input->type == XML_ELEMENT_NODE) {
-							/* find position of this parameter */
-							pos = 0;
-							while (pos < tapi_iter->tapi->rpc_clbks->callbacks[i].arg_count) {
-								if (xmlStrEqual(BAD_CAST tapi_iter->tapi->rpc_clbks->callbacks[i].arg_order[pos], op_input->name)) {
-									/* store copy of node to position */
-									((xmlNodePtr*)op_input_array)[pos] = xmlCopyNode(op_input, 1);
-									break;
-								}
-								pos++;
-							}
-							/* input node with this name not found in model defined inputs of RPC */
-							if (pos == tapi_iter->tapi->rpc_clbks->callbacks[i].arg_count) {
-								WARN("%s: input parameter %s not defined for RPC %s",__func__, op_input->name, tapi_iter->tapi->rpc_clbks->callbacks[i].name);
-							}
-						}
-						op_input = op_input->next;
-					}
-					xmlFreeNodeList(op_node);
+					op_input = xmlCopyNodeList(op_node->children);
+					xmlFreeNode(op_node);
 
 					/* call RPC callback function */
 					VERB("Calling %s RPC function\n", rpc_name);
-					reply = tapi_iter->tapi->rpc_clbks->callbacks[i].func(op_input_array);
-					/* clean array */
-					for (j = 0; j < tapi_iter->tapi->rpc_clbks->callbacks[i].arg_count; j++) {
-						xmlFreeNode(((xmlNodePtr*)op_input_array)[j]);
-					}
-					free (op_input_array);
+					reply = tapi_iter->tapi->rpc_clbks->callbacks[i].func(op_input);
+					xmlFreeNodeList(op_input);
 
 					/* end RPC search, there can be only one RPC with name == op_name */
 					break;
@@ -6217,7 +6184,7 @@ apply_editcopyconfig:
 		if (e != NULL) {
 			/* operation failed and error is filled */
 			reply = nc_reply_error(e);
-		} else if (data == NULL && ret != EXIT_SUCCESS) {
+		} else if (doc_merged == NULL && ret != EXIT_SUCCESS) {
 			if (ret == EXIT_RPC_NOT_APPLICABLE) {
 				/* operation can not be performed on this datastore */
 				reply = NCDS_RPC_NOT_APPLICABLE;
@@ -6226,13 +6193,16 @@ apply_editcopyconfig:
 				reply = nc_reply_error(nc_err_new(NC_ERR_OP_FAILED));
 			}
 		} else {
-			if (data != NULL) {
+			if (doc_merged != NULL) {
 				if (data_ns != NULL) {
-					reply = nc_reply_data_ns(data, data_ns);
+					reply = ncxml_reply_data_ns(doc_merged->children, data_ns);
 				} else {
-					reply = nc_reply_data(data);
+					reply = ncxml_reply_data(doc_merged->children);
 				}
-				free(data);
+				xmlFreeDoc(doc_merged);
+				if (!reply) {
+					return nc_reply_error(nc_err_new(NC_ERR_OP_FAILED));
+				}
 			} else {
 				reply = nc_reply_ok();
 			}
@@ -6244,7 +6214,7 @@ apply_editcopyconfig:
 	 * skip transapi if <edit-config> was performed with test-option set
 	 * to test-only value
 	 */
-	if (ds->transapis != NULL
+	if (ds->transapis != NULL && ds->tapi_callbacks_count
 		&& (op == NC_OP_COMMIT || op == NC_OP_COPYCONFIG || (op == NC_OP_EDITCONFIG && (nc_rpc_get_testopt(rpc) != NC_EDIT_TESTOPT_TEST))) &&
 		(nc_rpc_get_target(rpc) == NC_DATASTORE_RUNNING && nc_reply_get_type(reply) == NC_REPLY_OK)) {
 
@@ -6381,7 +6351,7 @@ API nc_reply* ncds_apply_rpc2all(struct nc_session* session, const nc_rpc* rpc, 
 					/* do not skip internal datastores */
 					target = nc_rpc_get_target(rpc);
 					for (ds_rollback = ncds.datastores; ds_rollback != ds; ds_rollback = ds_rollback->next) {
-						if (ds_rollback->datastore->transapis != NULL
+						if (ds_rollback->datastore->transapis != NULL && ds_rollback->datastore->tapi_callbacks_count
 								&& (op == NC_OP_COMMIT || op == NC_OP_COPYCONFIG || (op == NC_OP_EDITCONFIG && (nc_rpc_get_testopt(rpc) != NC_EDIT_TESTOPT_TEST)))
 								&& ( target == NC_DATASTORE_RUNNING)) {
 							transapi = 1;
@@ -6395,7 +6365,7 @@ API nc_reply* ncds_apply_rpc2all(struct nc_session* session, const nc_rpc* rpc, 
 							nc_err_free(e);
 							e = NULL;
 
-							old = read_datastore_data(data);
+							old = read_datastore_data(ds_rollback->datastore->id, data);
 							free(data);
 						}
 
@@ -6419,6 +6389,16 @@ API nc_reply* ncds_apply_rpc2all(struct nc_session* session, const nc_rpc* rpc, 
 			}
 		}
 	}
+
+#ifndef DISABLE_NOTIFICATIONS
+	if (op == NC_OP_EDITCONFIG || op == NC_OP_COPYCONFIG || op == NC_OP_DELETECONFIG || op == NC_OP_COMMIT) {
+		/* log the event */
+		target = nc_rpc_get_target(rpc);
+		if (nc_reply_get_type(reply) == NC_REPLY_OK && (target == NC_DATASTORE_RUNNING || target == NC_DATASTORE_STARTUP)) {
+			ncntf_event_new(-1, NCNTF_BASE_CFG_CHANGE, target, NCNTF_EVENT_BY_USER, session);
+		}
+	}
+#endif /* DISABLE_NOTIFICATIONS */
 
 	/* clean up the common data for calling nc_apply_rpc() */
 	nc_filter_free(rpc2all_data.filter);

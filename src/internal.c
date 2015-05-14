@@ -300,6 +300,14 @@ API int nc_init(int flags)
 		return (-1);
 	}
 
+	/* some flags need other flags, so check that all dependencies are fullfilled */
+	if (flags & NC_INIT_NACM) {
+		flags |= NC_INIT_DATASTORES;
+	}
+	if (flags & NC_INIT_KEEPALIVECHECK) {
+		flags |= NC_INIT_MONITORING;
+	}
+
 	if (flags & (NC_INIT_DATASTORES | NC_INIT_MONITORING | NC_INIT_NACM)) {
 
 		DBG("Shared memory key: %d", key);
@@ -319,7 +327,7 @@ API int nc_init(int flags)
 		/* attach memory */
 		nc_info = shmat(shmid, NULL, 0);
 		if (nc_info == (void*) -1) {
-			ERROR("Attaching shared memory failed (%s).", strerror(errno));
+			ERROR("Attaching shared memory failed (%s). You can try removing the memory by \"ipcrm -m %d\".", strerror(errno), shmid);
 			nc_info = NULL;
 			return (-1);
 		}
@@ -545,7 +553,9 @@ API int nc_close(void)
 		/* LOCK */
 		pthread_rwlock_wrlock(&(nc_info->lock));
 		if (nc_apps_check(my_comm, &(nc_info->apps)) == 1 && nc_init_flags & NC_INIT_MULTILAYER) {
-			/* shared memory including lock was deleted */
+			/* UNLOCK */
+			pthread_rwlock_unlock(&(nc_info->lock));
+			/* delete the shared memory */
 			retval = nc_shared_cleanup(1);
 		} else {
 			nc_info->stats.participants--;

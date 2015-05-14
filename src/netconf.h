@@ -282,6 +282,7 @@ typedef enum NC_FILTER_TYPE {
 typedef enum NC_EDIT_OP_TYPE {
 	NC_EDIT_OP_ERROR = -1,  /**< for internal purposes, not defined by NETCONF */
 	NC_EDIT_OP_MERGE = 1,   /**< merge */
+	NC_EDIT_OP_NOTSET = 0,  /**< compatibility value for NC_EDIT_DEFOP_TYPE */
 	NC_EDIT_OP_REPLACE = 2, /**< replace */
 	NC_EDIT_OP_CREATE,      /**< create */
 	NC_EDIT_OP_DELETE,      /**< delete */
@@ -437,17 +438,26 @@ typedef enum NC_TRANSPORT {
  * init this application crashed (based on same commands - executable binary names).
  */
 int nc_init(int flags);
+
+/*
+ * The difference between single and multi-layer server affects only
+ * nc_init() and nc_close() calls. Generally, single-layer application
+ * can be executed and finish several times, even during a single
+ * NETCONF session. A multi-layer application is expected to call
+ * nc_close() only after it actually finished all its work and no
+ * client is connected.
+ */
 #define NC_INIT_MULTILAYER 0x00001000  /**< nc_init()'s flag for multi-layer server architecture */
 #define NC_INIT_SINGLELAYER 0x00002000 /**< nc_init()'s flag for single-layer server architecture */
 
 #define NC_INIT_ALL        0xffffcfff /**< nc_init()'s flag to enable all optional features/subsystems */
 #define NC_INIT_NOTIF      0x00000002 /**< nc_init()'s flag to enable Notification subsystem. */
-#define NC_INIT_NACM       0x00000104 /**< nc_init()'s flag to enable Acccess Control subsystem */
+#define NC_INIT_NACM       0x00000004 /**< nc_init()'s flag to enable Acccess Control subsystem */
 #define NC_INIT_MONITORING 0x00000008 /**< nc_init()'s flag to enable ietf-netconf-monitoring module */
 #define NC_INIT_WD         0x00000010 /**< nc_init()'s flag to enable with-default capability */
 #define NC_INIT_VALIDATE   0x00000020 /**< nc_init()'s flag to enable server's validation capability */
 #define NC_INIT_URL        0x00000040 /**< nc_init()'s flag to enable server's URL capability */
-#define NC_INIT_KEEPALIVECHECK  0x00000088 /**< nc_init()'s flag to enable check of monitored sessions.
+#define NC_INIT_KEEPALIVECHECK  0x00000080 /**< nc_init()'s flag to enable check of monitored sessions.
  * Sometimes the process holding a monitored session crashes and status information
  * of the session is not properly removed from the monitored sessions list.
  * If this option is used, libnetconf checks if the process holding the session

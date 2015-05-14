@@ -197,7 +197,7 @@ LNCDS_FILES = dev-tools/lncdatastore/main.c \
 	dev-tools/lncdatastore/mreadline.h \
 	dev-tools/lncdatastore/Makefile.in
 
-XML_SRCS = models/ietf-netconf-acm-data.rng.in
+XML_SRCS = models/ietf-netconf-acm-config.rng.in
 
 BUILT_RNGS = $(XML_SRCS:models/%.rng.in=models/%.rng)
 
@@ -215,9 +215,9 @@ $(NAME).la: $(LOBJS)
 .PHONY: $(LNCTOOL)
 $(LNCTOOL): $(LNCTOOL).in
 	@if test -n "$(HAVE_PYANG)" -a -n "$(HAVE_XSLTPROC)"; then \
-		sed "s/@RNGLIB@/$(subst /,\/,$(DESTDIR)/$(datadir)/$(NAME)/rnglib/)/g" $< | \
-		sed 's/@XSLTDIR@/$(subst /,\/,$(DESTDIR)/$(datadir)/$(NAME)/xslt/)/g' | \
-		sed 's/@TEMPLATEDIR@/$(subst /,\/,$(DESTDIR)/$(datadir)/$(NAME)/templates/)/g' > $(LNCTOOL).install; \
+		sed "s/@RNGLIB@/$(subst /,\/,@LNCTOOLDESTDIR@$(datadir)/$(NAME)/rnglib/)/g" $< | \
+		sed 's/@XSLTDIR@/$(subst /,\/,@LNCTOOLDESTDIR@$(datadir)/$(NAME)/xslt/)/g' | \
+		sed 's/@TEMPLATEDIR@/$(subst /,\/,@LNCTOOLDESTDIR@$(datadir)/$(NAME)/templates/)/g' > $(LNCTOOL).install; \
 		sed "s/@RNGLIB@/$(subst /,\/,$(abs_srcdir)/dev-tools/lnctool/rnglib/)/g" $< | \
 		sed 's/@XSLTDIR@/$(subst /,\/,$(abs_srcdir)/dev-tools/lnctool/xslt/)/g' | \
 		sed 's/@TEMPLATEDIR@/$(subst /,\/,$(abs_srcdir)/dev-tools/lnctool/generator/)/g' > $(LNCTOOL); \
@@ -236,7 +236,7 @@ $(OBJDIR)/%.lo: %.c
 .PHONY: doc
 doc: doc/doxygen/html/index.html
 
-doc/doxygen/html/index.html: $(DOXYGEN_CONFIG) $(HDRS_PRIV) $(DOXYGEN_CONFIG_PYTHON) $(PYHDRS)
+doc/doxygen/html/index.html: $(DOXYGEN_CONFIG).in $(HDRS_PRIV) $(DOXYGEN_CONFIG_PYTHON) $(PYHDRS)
 	@if [ "$(DOXYGEN)" != "no" ]; then \
 		[ -d $(DOXYGEN_DIR) ] || mkdir -p $(DOXYGEN_DIR); \
 		$(DOXYGEN); \
@@ -283,7 +283,7 @@ tarball-pyapi: tarball
 rpm: tarball $(TARBALLPYAPI)
 	if [ "$(RPMBUILD)" != "no" ]; then \
 		mkdir -p $(RPMDIR)/BUILD $(RPMDIR)/RPMS $(RPMDIR)/SRPMS; \
-		$(RPMBUILD) -ba $(NAME).spec \
+		QA_RPATHS="[ 0x0001|0x0010 ]" $(RPMBUILD) -ba $(NAME).spec \
 			--define "_topdir `pwd`/$(RPMDIR)"; \
 		if [ -n "$(PYAPI)" ]; then \
 			$(RPMBUILD) -ba python/python3-netconf.spec \
@@ -349,7 +349,6 @@ install-devel: $(LNCTOOL) $(NAME).la $(HDRS_PUBL_ROOT) $(HDRS_PUBL_SUBDIR) $(NAM
 	[ -d $(DESTDIR)/$(bindir) ] || \
 	   	(mkdir -p $(DESTDIR)/$(bindir); chmod 755 $(DESTDIR)/$(bindir)); \
 	$(INSTALL_PROGRAM) $(LNCTOOL).install $(DESTDIR)/$(bindir)/lnctool; \
-	$(INSTALL_PROGRAM) $(DESTDIR)/$(bindir)/lncdatastore; \
 	$(INSTALL_DATA) dev-tools/lnctool/rnglib/* $(DESTDIR)/$(datadir)/$(NAME)/rnglib/; \
 	$(INSTALL_DATA) dev-tools/lnctool/xslt/* $(DESTDIR)/$(datadir)/$(NAME)/xslt/;
 	$(INSTALL_DATA) dev-tools/lnctool/generator/* $(DESTDIR)/$(datadir)/$(NAME)/templates/;

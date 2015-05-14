@@ -1464,6 +1464,7 @@ static int nc_session_send(struct nc_session* session, struct nc_msg *msg)
 	DBG("Writing message (session %s): %s", session->session_id, text);
 
 	DBG_LOCK("mut_channel");
+	session->mut_channel_flag = 1;
 	pthread_mutex_lock(session->mut_channel);
 	/* if v1.1 send chunk information before message */
 	if (session->version == NETCONFV11) {
@@ -1471,14 +1472,20 @@ static int nc_session_send(struct nc_session* session, struct nc_msg *msg)
 		c = 0;
 		do {
 			NC_WRITE(session, &(buf[c]), c, ret);
+			if (ret < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+				usleep(10);
+				continue;
+			}
 			if (ret < 0) {
 				DBG_UNLOCK("mut_channel");
+				session->mut_channel_flag = 0;
 				pthread_mutex_unlock(session->mut_channel);
 				return (EXIT_FAILURE);
 			}
 #ifndef DISABLE_LIBSSH
 			if (c == LIBSSH2_ERROR_TIMEOUT) {
 				DBG_UNLOCK("mut_channel");
+				session->mut_channel_flag = 0;
 				pthread_mutex_unlock(session->mut_channel);
 				VERB("Writing data into the communication channel timeouted.");
 				return (EXIT_FAILURE);
@@ -1491,14 +1498,20 @@ static int nc_session_send(struct nc_session* session, struct nc_msg *msg)
 	c = 0;
 	do {
 		NC_WRITE(session, &(text[c]), c, ret);
+		if (ret < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+			usleep(10);
+			continue;
+		}
 		if (ret < 0) {
 			DBG_UNLOCK("mut_channel");
+			session->mut_channel_flag = 0;
 			pthread_mutex_unlock(session->mut_channel);
 			return (EXIT_FAILURE);
 		}
 #ifndef DISABLE_LIBSSH
 		if (c == LIBSSH2_ERROR_TIMEOUT) {
 			DBG_UNLOCK("mut_channel");
+			session->mut_channel_flag = 0;
 			pthread_mutex_unlock(session->mut_channel);
 			VERB("Writing data into the communication channel timeouted.");
 			return (EXIT_FAILURE);
@@ -1516,14 +1529,20 @@ static int nc_session_send(struct nc_session* session, struct nc_msg *msg)
 	c = 0;
 	do {
 		NC_WRITE(session, &(text[c]), c, ret);
+		if (ret < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+			usleep(10);
+			continue;
+		}
 		if (ret < 0) {
 			DBG_UNLOCK("mut_channel");
+			session->mut_channel_flag = 0;
 			pthread_mutex_unlock(session->mut_channel);
 			return (EXIT_FAILURE);
 		}
 #ifndef DISABLE_LIBSSH
 		if (c == LIBSSH2_ERROR_TIMEOUT) {
 			DBG_UNLOCK("mut_channel");
+			session->mut_channel_flag = 0;
 			pthread_mutex_unlock(session->mut_channel);
 			VERB("Writing data into the communication channel timeouted.");
 			return (EXIT_FAILURE);
@@ -1533,6 +1552,7 @@ static int nc_session_send(struct nc_session* session, struct nc_msg *msg)
 
 	/* unlock the session's output */
 	DBG_UNLOCK("mut_channel");
+	session->mut_channel_flag = 0;
 	pthread_mutex_unlock(session->mut_channel);
 
 	return (EXIT_SUCCESS);
@@ -1881,6 +1901,15 @@ static NC_MSG_TYPE nc_session_receive(struct nc_session* session, int timeout, s
 		return (NC_MSG_UNKNOWN);
 	}
 
+	/* if there is waiting sending thread, sleep for timeout and return
+	 * with NC_MSG_WOULDBLOCK because we probably relock the mut_channel quite
+	 * fast, so we are trying to avoid starvation this way
+	 */
+	if (session->mut_channel_flag) {
+		usleep(timeout ? timeout : 1);
+		return (NC_MSG_WOULDBLOCK);
+	}
+
 	/* lock the session for receiving */
 	DBG_LOCK("mut_channel");
 	pthread_mutex_lock(session->mut_channel);
@@ -2120,9 +2149,6 @@ static NC_MSG_TYPE nc_session_receive(struct nc_session* session, int timeout, s
 	} else if (xmlStrcmp (root->name, BAD_CAST "rpc") == 0) {
 		msgtype = NC_MSG_RPC;
 
-		/* set rpc type flag */
-		nc_rpc_parse_type(retval);
-
 		/* set with-defaults if any */
 		nc_rpc_parse_withdefaults(retval, NULL);
 	} else if (xmlStrcmp (root->name, BAD_CAST "notification") == 0) {
@@ -2168,7 +2194,11 @@ malformed_msg:
 			return (NC_MSG_UNKNOWN);
 		}
 
-		nc_session_send_reply(session, NULL, reply);
+		if (nc_session_send_reply(session, NULL, reply) == 0) {
+			ERROR("Unable to send the \'Malformed message\' reply");
+			nc_session_close(session, NC_SESSION_TERM_OTHER);
+			return (NC_MSG_UNKNOWN);
+		}
 		nc_reply_free(reply);
 	}
 
@@ -2474,7 +2504,9 @@ try_again:
 
 			if (e != NULL) {
 				reply = nc_reply_error(e);
-				nc_session_send_reply(session, *rpc, reply);
+				if (nc_session_send_reply(session, *rpc, reply) == 0) {
+					ERROR("Failed to send the reply.");
+				}
 				nc_rpc_free(*rpc);
 				*rpc = NULL;
 				nc_reply_free(reply);
@@ -2506,7 +2538,9 @@ try_again:
 			e = nc_err_new(NC_ERR_ACCESS_DENIED);
 			nc_err_set(e, NC_ERR_PARAM_MSG, "Operation not permitted.");
 			reply = nc_reply_error(e);
-			nc_session_send_reply(session, *rpc, reply);
+			if (nc_session_send_reply(session, *rpc, reply) == 0) {
+				ERROR("Failed to send reply.");
+			}
 			nc_rpc_free(*rpc);
 			*rpc = NULL;
 			nc_reply_free(reply);
@@ -2522,6 +2556,9 @@ try_again:
 
 		/* assign operation value */
 		nc_rpc_assign_op(*rpc);
+
+		/* set rpc type flag */
+		nc_rpc_parse_type(*rpc);
 
 		/* assign source/target datastore types */
 		nc_rpc_assign_ds(*rpc, "source");

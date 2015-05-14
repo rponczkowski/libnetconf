@@ -545,6 +545,7 @@ static int nc_server_handshake(struct nc_session *session, char** cpblts)
 	do {
 		snprintf(session->session_id, SID_SIZE, "%lu", ++nc_info->last_session_id);
 	} while (nc_session_is_monitored(session->session_id));
+	pthread_rwlock_unlock(&(nc_info->lock));
 
 	/* create server's <hello> message */
 	hello = nc_msg_server_hello(cpblts, session->session_id);
@@ -840,7 +841,7 @@ API struct nc_session *nc_session_accept_inout(const struct nc_cpblts* capabilit
 	}
 
 	/* allocate netconf session structure */
-	retval = malloc(sizeof(struct nc_session));
+	retval = calloc(1, sizeof(struct nc_session));
 	if (retval == NULL) {
 		ERROR("Memory allocation failed (%s)", strerror(errno));
 		return (NULL);
