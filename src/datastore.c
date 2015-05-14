@@ -5306,7 +5306,16 @@ static nc_reply* ncds_apply_transapi(struct ncds_ds* ds, const struct nc_session
 				/* remove default nodes */
 				ncdflt_default_clear(old);
 				/* revert changes */
-				xmlDocDumpMemory(old, &config, NULL);
+				xmlBufferPtr buffer = xmlBufferCreate();
+
+				xmlNodeDump(buffer,
+									 old,
+									 xmlDocGetRootElement(old),
+									 0,
+									 0);
+				config = xmlStrdup(xmlBufferContent(buffer));
+				xmlBufferFree(buffer);
+				//xmlDocDumpMemory(old, &config, NULL);
 			} else { /* modified != 0 */
 				/* remove default nodes */
 				ncdflt_default_clear(new);
