@@ -975,6 +975,16 @@ API int ncds_device_init(ncds_id *id, struct nc_cpblts *cpblts, int force)
 				xmlBufferEmpty(running_buf);
 			}
 
+			/* replace running datastore with current configuration provided by module, or erase it if none provided
+			 * this is done be low level function to bypass transapi */
+			ret = ds_iter->datastore->func.copyconfig(ds_iter->datastore, NULL, NULL, NC_DATASTORE_RUNNING, NC_DATASTORE_CONFIG, new_running_config, &err);
+			if (ret != 0 && ret != EXIT_RPC_NOT_APPLICABLE) {
+				ERROR("Failed to replace running with current configuration (%s).", err ? err->message : "unknown error");
+				nc_err_free(err);
+				retval = EXIT_FAILURE;
+				goto cleanup;
+			}
+
 			/* Clean RUNNING datastore. This is important when transAPI is deployed and does not harm when not. */
 			/* It is done by calling low level function to avoid invoking transAPI now. */
 
@@ -983,16 +993,6 @@ API int ncds_device_init(ncds_id *id, struct nc_cpblts *cpblts, int force)
 			 * reboots
 			 */
 			if (!nc_cpblts_enabled(dummy_session, NC_CAP_STARTUP_ID)) {
-				goto cleanup;
-			}
-
-			/* replace running datastore with current configuration provided by module, or erase it if none provided
-			 * this is done be low level function to bypass transapi */
-			ret = ds_iter->datastore->func.copyconfig(ds_iter->datastore, NULL, NULL, NC_DATASTORE_RUNNING, NC_DATASTORE_CONFIG, new_running_config, &err);
-			if (ret != 0 && ret != EXIT_RPC_NOT_APPLICABLE) {
-				ERROR("Failed to replace running with current configuration (%s).", err ? err->message : "unknown error");
-				nc_err_free(err);
-				retval = EXIT_FAILURE;
 				goto cleanup;
 			}
 
