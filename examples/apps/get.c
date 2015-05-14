@@ -51,7 +51,7 @@
 #endif
 
 #define CAPABILITY_PREFIX "urn:ietf:params:netconf:"
-#define ARGUMENTS "f:hL:p:v"
+#define ARGUMENTS "f:hl:p:v"
 
 void clb_print(NC_VERB_LEVEL level, const char* msg)
 {
@@ -92,7 +92,7 @@ void usage(char* progname)
 	printf("-f \"<filter>\"  Apply NETCONF subtree filter. Remember to correctly escape the argument.\n");
 	printf("-h             Show this help\n");
 	printf("-p <port>      Connect to a specific port, 830 is default port\n");
-	printf("-L <user>      Connect as a specific user, current user is used by default\n");
+	printf("-l <user>      Connect as a specific user, current user is used by default\n");
 	printf("-v             Verbose mode\n\n");
 	printf("Hostname is a domain name or IP address of the NETCONF server, \'localhost\' is a default value.\n\n");
 }
@@ -126,7 +126,7 @@ int main(int argc, char* argv[])
 			port = (unsigned short) atoi (optarg);
 			break;
 
-		case 'L': /* login */
+		case 'l': /* login */
 			user = optarg;
 			break;
 

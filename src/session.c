@@ -135,10 +135,8 @@ struct session_list_map {
 	struct session_list_item record[1]; /* first record of the session records list */
 };
 
-extern char* working_dir;
 static int session_list_fd = -1;
 static struct session_list_map *session_list = NULL;
-static char* sessionsfile_path = NULL;
 
 /**
  * Sleep time in microseconds to wait between unsuccessful reading due to EAGAIN or EWOULDBLOCK
@@ -200,7 +198,7 @@ int nc_session_monitoring_init(void)
 	size_t size;
 	pthread_rwlockattr_t rwlockattr;
 	mode_t um;
-	
+
 	if (session_list != NULL) {
 		ERROR("%s: session list already exists.", __func__);
 		return (EXIT_FAILURE);
@@ -210,27 +208,12 @@ int nc_session_monitoring_init(void)
 		close(session_list_fd);
 	}
 
-	if(working_dir == NULL) {
-		sessionsfile_path = malloc(sizeof(SESSIONSFILE_PATH)+1);
-		if(!sessionsfile_path) {
-			return (EXIT_FAILURE);
-		}
-		sprintf(sessionsfile_path, "%s", SESSIONSFILE_PATH);
-	}
-	else {
-		sessionsfile_path = malloc(strlen(working_dir)+sizeof(SESSIONSFILE)+2);
-		if(!sessionsfile_path) {
-			return (EXIT_FAILURE);
-		}
-		sprintf(sessionsfile_path, "%s/%s", working_dir, SESSIONSFILE);
-	}
-
 	um = umask(0000);
-	session_list_fd = open(sessionsfile_path, O_CREAT | O_RDWR, FILE_PERM);
+	session_list_fd = open(SESSIONSFILE_PATH, O_CREAT | O_RDWR, FILE_PERM);
 	umask(um);
 	if (session_list_fd == -1) {
 		ERROR("Opening the sessions monitoring file failed (%s).", strerror(errno));
-		goto _INIT_ERROR;
+		return (EXIT_FAILURE);
 	}
 
 	/* get the file size */
@@ -238,7 +221,7 @@ int nc_session_monitoring_init(void)
 		ERROR("Unable to get the sessions monitoring file information (%s)", strerror(errno));
 		close(session_list_fd);
 		session_list_fd = -1;
-		goto _INIT_ERROR;
+		return (EXIT_FAILURE);
 	}
 
 	if (fdinfo.st_size == 0) {
@@ -261,7 +244,7 @@ int nc_session_monitoring_init(void)
 		close(session_list_fd);
 		session_list = NULL;
 		session_list_fd = -1;
-		goto _INIT_ERROR;
+		return (EXIT_FAILURE);
 	}
 
 	if (first) {
@@ -276,10 +259,6 @@ int nc_session_monitoring_init(void)
 	}
 
 	return (EXIT_SUCCESS);
-_INIT_ERROR:
-	free(sessionsfile_path);
-	sessionsfile_path = NULL;
-	return (EXIT_FAILURE);
 }
 
 void nc_session_monitoring_close(void)
@@ -289,10 +268,6 @@ void nc_session_monitoring_close(void)
 		close(session_list_fd);
 		session_list = NULL;
 		session_list_fd = -1;
-	}
-	if(sessionsfile_path) {
-		free(sessionsfile_path);
-		sessionsfile_path = NULL;
 	}
 }
 
@@ -520,14 +495,14 @@ static void nc_session_monitor_alive_check(void)
 	struct session_list_item *litem;
 	char dirpath[ALIVECHECK_PATH_LENGTH];
 	char linkpath[ALIVECHECK_PATH_LENGTH];
-	char linkname[strlen(sessionsfile_path) + 1];
+	char linkname[sizeof(SESSIONSFILE_PATH) + 1];
 	char* aux = NULL;
 	int len;
 	DIR *dir;
 	struct dirent* pfd;
 
 	if (session_list != NULL) {
-		aux = strdup(sessionsfile_path);
+		aux = strdup(SESSIONSFILE_PATH);
 		nc_clip_occurences_with(aux, '/', '/');
 
 		pthread_rwlock_wrlock(&(session_list->lock));
@@ -2144,9 +2119,6 @@ static NC_MSG_TYPE nc_session_receive(struct nc_session* session, int timeout, s
 
 	} else if (xmlStrcmp (root->name, BAD_CAST "rpc") == 0) {
 		msgtype = NC_MSG_RPC;
-
-		/* assign rpc op type */
-		nc_rpc_assign_op(retval);
 
 		/* set rpc type flag */
 		nc_rpc_parse_type(retval);
