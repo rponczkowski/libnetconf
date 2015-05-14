@@ -77,9 +77,9 @@ struct auth_pref_couple
 
 #define AUTH_COUNT 3
 static struct auth_pref_couple sshauth_pref[AUTH_COUNT] = {
+		{ NC_SSH_AUTH_PUBLIC_KEYS, 1 },
 		{ NC_SSH_AUTH_INTERACTIVE, 3 },
-		{ NC_SSH_AUTH_PASSWORD, 2 },
-		{ NC_SSH_AUTH_PUBLIC_KEYS, 1 }
+		{ NC_SSH_AUTH_PASSWORD, 2 }
 };
 
 API void nc_ssh_pref(NC_SSH_AUTH_TYPE type, short int preference)

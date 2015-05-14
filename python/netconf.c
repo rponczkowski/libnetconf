@@ -450,6 +450,20 @@ static PyObject *ncDatastoreAddAugmentStatic(PyObject *self, PyObject *args, PyO
 	Py_RETURN_NONE;
 }
 
+static PyObject *ncSetKeysPath(PyObject *self, PyObject *args, PyObject *keywords)
+{
+	const char *priv_path,*pub_path;
+	char *name = NULL;
+	PyObject *PyFeatures = NULL;
+	char *kwlist[] = {"priv_path", "pub_path", NULL};
+
+	/* Get input parameters */
+	if (! PyArg_ParseTupleAndKeywords(args, keywords, "ss", kwlist, &priv_path, &pub_path)) {
+		return (NULL);
+	}
+	nc_set_keypair_path(priv_path,pub_path);
+	Py_RETURN_NONE;
+}
 
 static PyObject *ncNotifyGenericEvent(PyObject *self, PyObject *args, PyObject *keywords)
 {
@@ -477,6 +491,7 @@ static PyMethodDef netconfMethods[] = {
 		{"addAugmentStatic", (PyCFunction)ncDatastoreAddAugmentStatic, METH_VARARGS | METH_KEYWORDS, "Add augmenting model."},
 		{"addDatastoreStatic",(PyCFunction)ncDatastoreAddStatic,METH_VARARGS | METH_KEYWORDS,"add static datastore"},
 		{"GenericEvent",(PyCFunction)ncNotifyGenericEvent,METH_VARARGS | METH_KEYWORDS,"Notify_event"},
+		{"setKeysPath",(PyCFunction)ncSetKeysPath,METH_VARARGS | METH_KEYWORDS,"Notify_event"},
 		{NULL, NULL, 0, NULL}
 };
 #if PY_MAJOR_VERSION >= 3
