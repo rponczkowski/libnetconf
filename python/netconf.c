@@ -14,23 +14,25 @@ PyObject *libnetconfWarning;
 struct nc_cpblts *global_cpblts = NULL;
 PyObject *datastores = NULL; /* dictionary */
 
+
+
 static int syslogEnabled = 1;
-static void clb_print(NC_VERB_LEVEL level, const char* msg)
+
+void clb_print(NC_VERB_LEVEL level, const char* msg)
 {
+
 	switch (level) {
 	case NC_VERB_ERROR:
-		PyErr_SetString(libnetconfError, msg);
-		if (syslogEnabled) {syslog(LOG_ERR, "%s", msg);}
+		syslog(LOG_ERR, "E| %s", msg);
 		break;
 	case NC_VERB_WARNING:
-		if (syslogEnabled) {syslog(LOG_WARNING, "%s", msg);}
-		PyErr_WarnEx(libnetconfWarning, msg, 1);
+		syslog(LOG_WARNING, "W| %s", msg);
 		break;
 	case NC_VERB_VERBOSE:
-		if (syslogEnabled) {syslog(LOG_INFO, "%s", msg);}
+		syslog(LOG_INFO, "V| %s", msg);
 		break;
 	case NC_VERB_DEBUG:
-		if (syslogEnabled) {syslog(LOG_DEBUG, "%s", msg);}
+		syslog(LOG_DEBUG, "D| %s", msg);
 		break;
 	}
 }
@@ -44,7 +46,7 @@ static PyObject *setSyslog(PyObject *self, PyObject *args, PyObject *keywds)
 
 	static char *kwlist[] = {"enabled", "name", "option", "facility", NULL};
 
-	if (! PyArg_ParseTupleAndKeywords(args, keywds, "p|sii", kwlist, &syslogEnabled, &name, &option, &facility)) {
+	if (! PyArg_ParseTupleAndKeywords(args, keywds, "i|sii", kwlist, &syslogEnabled, &name, &option, &facility)) {
 		return NULL;
 	}
 
@@ -208,6 +210,88 @@ static PyObject *ncDatastoreAddImport(PyObject *self, PyObject *args, PyObject *
 	Py_RETURN_NONE;
 }
 
+static PyObject *ncDatastoreAddStatic(PyObject *self, PyObject *args, PyObject *keywords)
+{
+	const char *path, *datastore = NULL;
+	char *name = NULL;
+	NCDS_TYPE type = NCDS_TYPE_EMPTY;
+	struct ncds_ds *ds;
+	ncds_id dsid;
+	PyObject *PyFeatures = NULL,*transapi_cap = NULL;
+	char *kwlist[] = {"model", "datastore", "transapi", "features", NULL};
+
+	/* Get input parameters */
+	if (! PyArg_ParseTupleAndKeywords(args, keywords, "s|zO!O!", kwlist, &path, &datastore,&PyCapsule_Type, &transapi_cap, &PyList_Type, &PyFeatures)) {
+		return (NULL);
+	}
+
+	/* set correct type according to provided parameters */
+	if (datastore) {
+		type = NCDS_TYPE_FILE;
+	}
+
+	/* get name of the datastore for further referencing */
+	if (ncds_model_info(path, &name, NULL, NULL, NULL, NULL, NULL) != EXIT_SUCCESS) {
+		return (NULL);
+	}
+	PyObject *key, *value;
+	Py_ssize_t pos = 0;
+
+	syslog(LOG_ERR," transapi struct correctness %i name %s",PyCapsule_IsValid(transapi_cap, NULL),PyCapsule_GetName(transapi_cap));
+	struct transapi* transapi = (struct transapi* )PyCapsule_GetPointer(transapi_cap, "transapi._X_C_API");
+
+	/* create datastore */
+	if (transapi) {
+		if ((ds = ncds_new_transapi_static(type, path, transapi)) == NULL) {
+			syslog(LOG_ERR,"Error with adding static transapi");
+			free(name);
+			return (NULL);
+		}
+	} else {
+		/* todo get_state() */
+		if ((ds = ncds_new(type, path, NULL)) == NULL) {
+			free(name);
+			return (NULL);
+		}
+	}
+
+
+	if (datastore) {
+		if (ncds_file_set_path(ds, datastore) != EXIT_SUCCESS) {
+			ncds_free(ds);
+			free(name);
+			return (NULL);
+		}
+
+	}
+
+	if ((dsid = ncds_init(ds)) <= 0) {
+		ncds_free(ds);
+		free(name);
+		return (NULL);
+	}
+
+	set_features(name, PyFeatures);
+
+	if (ncds_consolidate() != EXIT_SUCCESS) {
+		ncds_free(ds);
+		free(name);
+		return (NULL);
+	}
+	struct nc_cpblts* capab = nc_session_get_cpblts_default();
+	nc_cpblts_remove(capab,"urn:ietf:params:netconf:capability:startup:1.0");
+	if (ncds_device_init(&dsid, capab, 0)) {
+		ncds_free(ds);
+		free(name);
+		return (NULL);
+	}
+
+	PyDict_SetItem(datastores, PyUnicode_FromFormat("%d", dsid), PyUnicode_FromString(name));
+
+	free(name);
+	Py_RETURN_NONE;
+}
+
 static PyObject *ncDatastoreAdd(PyObject *self, PyObject *args, PyObject *keywords)
 {
 	const char *path, *datastore = NULL, *transapi = NULL;
@@ -322,6 +406,66 @@ static PyObject *ncDatastoreAddAugment(PyObject *self, PyObject *args, PyObject 
 	Py_RETURN_NONE;
 }
 
+static PyObject *ncDatastoreAddAugmentStatic(PyObject *self, PyObject *args, PyObject *keywords)
+{
+
+	const char *path;
+	char *name = NULL;
+	PyObject *PyFeatures = NULL,*transapi_cap = NULL;
+	char *kwlist[] = {"model", "transapi", "features", NULL};
+
+	/* Get input parameters */
+	if (! PyArg_ParseTupleAndKeywords(args, keywords, "s|O!O!", kwlist, &path, &PyCapsule_Type, &transapi_cap, &PyList_Type, &PyFeatures)) {
+		return (NULL);
+	}
+
+	struct transapi* transapi = (struct transapi* )PyCapsule_GetPointer(transapi_cap, "transapi._X_C_API");
+	printf("transapi %i\n",transapi);
+
+	/* get name of the datastore for further referencing */
+	if (ncds_model_info(path, &name, NULL, NULL, NULL, NULL, NULL) != EXIT_SUCCESS) {
+		return (NULL);
+	}
+
+	/* create datastore */
+	if (transapi) {
+		if (ncds_add_augment_transapi_static(path, transapi) == EXIT_FAILURE) {
+			free(name);
+			return (NULL);
+		}
+	} else {
+		if (ncds_add_model(path) == EXIT_FAILURE) {
+			free(name);
+			return (NULL);
+		}
+	}
+
+	set_features(name, PyFeatures);
+	free(name);
+
+	if (ncds_consolidate() != EXIT_SUCCESS) {
+		return (NULL);
+	}
+
+	Py_RETURN_NONE;
+}
+
+
+static PyObject *ncNotifyGenericEvent(PyObject *self, PyObject *args, PyObject *keywords)
+{
+	const char *data, *transapi = NULL;
+	char *name = NULL;
+	PyObject *PyFeatures = NULL;
+	char *kwlist[] = {"data",  NULL};
+
+	/* Get input parameters */
+	if (! PyArg_ParseTupleAndKeywords(args, keywords, "s", kwlist, &data)) {
+		return (NULL);
+	}
+	ncntf_event_new(-1, NCNTF_GENERIC, data);
+	Py_RETURN_NONE;
+}
+
 static PyMethodDef netconfMethods[] = {
 		{"setVerbosity", (PyCFunction)setVerbosity, METH_VARARGS | METH_KEYWORDS, "Set verbose level (0-3)."},
 		{"setSyslog", (PyCFunction)setSyslog, METH_VARARGS | METH_KEYWORDS, "Set application settings for syslog."},
@@ -330,9 +474,12 @@ static PyMethodDef netconfMethods[] = {
 		{"addModel", (PyCFunction)ncDatastoreAddImport, METH_VARARGS | METH_KEYWORDS, "Add standalone model without datastore needed as import from other data model."},
 		{"addDatastore", (PyCFunction)ncDatastoreAdd, METH_VARARGS | METH_KEYWORDS, "Add basic data model connected with the datastore."},
 		{"addAugment", (PyCFunction)ncDatastoreAddAugment, METH_VARARGS | METH_KEYWORDS, "Add augmenting model."},
+		{"addAugmentStatic", (PyCFunction)ncDatastoreAddAugmentStatic, METH_VARARGS | METH_KEYWORDS, "Add augmenting model."},
+		{"addDatastoreStatic",(PyCFunction)ncDatastoreAddStatic,METH_VARARGS | METH_KEYWORDS,"add static datastore"},
+		{"GenericEvent",(PyCFunction)ncNotifyGenericEvent,METH_VARARGS | METH_KEYWORDS,"Notify_event"},
 		{NULL, NULL, 0, NULL}
 };
-
+#if PY_MAJOR_VERSION >= 3
 static struct PyModuleDef ncModule = {
 		PyModuleDef_HEAD_INIT,
 		"netconf",
@@ -340,14 +487,22 @@ static struct PyModuleDef ncModule = {
 		-1,
 		netconfMethods,
 };
+#endif
+
+#if PY_MAJOR_VERSION >= 3
+    #define MOD_INIT(name) PyMODINIT_FUNC PyInit_##name(void)
+#else
+    #define MOD_INIT(name) PyMODINIT_FUNC init##name(void)
+#endif
 
 /* module initializer */
-PyMODINIT_FUNC PyInit_netconf(void)
+MOD_INIT(netconf)
 {
 	PyObject *nc;
 
 	/* initiate libnetconf - all subsystems */
-	nc_init(NC_INIT_ALL);
+	nc_verbosity(NC_VERB_DEBUG);
+	nc_init(NC_INIT_ALL | NC_INIT_MULTILAYER);
 
 	/* set print callback */
 	nc_callback_print(clb_print);
@@ -361,7 +516,12 @@ PyMODINIT_FUNC PyInit_netconf(void)
 	}
 
 	/* create netconf as the Python module */
+#if PY_MAJOR_VERSION >= 3
 	nc = PyModule_Create(&ncModule);
+#else
+    nc = Py_InitModule3("netconf",
+    		netconfMethods, "NETCONF Protocol implementation");
+#endif
 	if (nc == NULL) {
 		return NULL;
 	}
