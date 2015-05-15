@@ -43,6 +43,7 @@ try:
 	import shutil
 	import re
 	import os
+	import sys
 	import subprocess
 	import tempfile
 except ImportError as e:
@@ -56,8 +57,10 @@ transapi_version = 6
 RNGLIB='@RNGLIB@'
 XSLTDIR='@XSLTDIR@'
 TEMPLATEDIR='@TEMPLATEDIR@'
+YIN_FILE=''
 
 pyAPI = False
+no_templates = False
 
 def pyang_output(arguments):
 	try:
@@ -68,24 +71,30 @@ def pyang_output(arguments):
 		child = subprocess.Popen(arguments, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 		(data, errdata) = child.communicate()
 		child.wait()
+		if errdata:
+			print(errdata)
 		return data
 
 # Find pyang and use it to convert model to YIN
 def convert_to_yin(input_file_name, search_path):
+	global YIN_FILE
 	# convert model to YIN using pyang
 	arguments = ['pyang', '-p', search_path, '-f', 'yin', input_file_name]
 	yin_data = pyang_output(arguments)
+	if not yin_data:
+		exit(1)
 	model = libxml2.parseMemory(yin_data, len(yin_data))
 	# infer name of file from input file name
 	(yin_file_name, ext) = os.path.splitext(os.path.basename(input_file_name))
 	yin_file_name+='.yin'
+	YIN_FILE=args.output_dir+'/'+yin_file_name
 	# store converted yin
-	yin_file = open(args.output_dir+'/'+yin_file_name, 'w')
+	yin_file = open(YIN_FILE, 'w')
 	yin_file.write(str(model))
 	yin_file.close()
 
 	return(model)
-
+	
 def generate_validators(yin_model_path, augment_models_paths, search_path, features):
 	(yin_file_name, ext) = os.path.splitext(os.path.basename(yin_model_path))
 	yin_file_name = args.output_dir+'/'+os.path.basename(yin_file_name)
@@ -136,6 +145,8 @@ def generate_configure_in(replace):
 
 # Copy source files for autotools
 def generate_template_files(replace):
+	if no_templates:
+		return
 	shutil.copy2(args.template_dir+'/install-sh', args.output_dir+'/install-sh')
 	shutil.copy2(args.template_dir+'/config.guess', args.output_dir+'/config.guess')
 	shutil.copy2(args.template_dir+'/config.sub', args.output_dir+'/config.sub')
@@ -800,13 +811,20 @@ try:
 	augment_models_paths = []
 	args = parser.parse_args()
 
+	# prepere tools directory
+	if not os.path.exists(RNGLIB):
+		RNGLIB = os.path.dirname(os.path.realpath(sys.argv[0]))+'/rnglib/'
+		XSLTDIR = os.path.dirname(os.path.realpath(sys.argv[0]))+'/xslt/'
+		TEMPLATEDIR = './generator/'
+		no_templates = True
+
 	# prepare output directory
 	if not os.path.exists(args.output_dir):
 		os.makedirs(args.output_dir)
 
 	# whatever type the model is try to convert it to YIN
 	model = convert_to_yin(args.model.name, args.search_path)
-	(model_name, ext) = os.path.splitext(os.path.abspath(args.model.name))
+	(model_name, ext) = os.path.splitext(os.path.abspath(YIN_FILE))
 
 	if not args.augment_model is None:
 		for augment_model in args.augment_model:
@@ -816,15 +834,15 @@ try:
 
 	# when subcommand is 'validation' or 'transapi'
 	if args.subcommand != 'convert':
-		generate_validators(model_name+'.yin', augment_models_paths, args.search_path, args.feature)
+		generate_validators(YIN_FILE, augment_models_paths, args.search_path, args.feature)
 
 	if args.subcommand == 'transapi' or args.subcommand == "transapi_py":
 		if args.subcommand == 'transapi_py':
 			pyAPI = True
 		# process model and find module name
 		if args.name is None:
-			(module_name,ext) = os.path.splitext(os.path.basename(args.model.name))
-			module_name = module_name.translate(None, '-@')
+			(module_name,ext) = os.path.splitext(os.path.basename(YIN_FILE))
+#			module_name = module_name.translate(None, '-@')
 		else:
 			module_name = args.name
 
@@ -835,28 +853,28 @@ try:
 		if not pyAPI:
 			# copy files for autotools (Makefile.in, ...)
 			generate_template_files(replace)
-            	else:
-                	generate_setup_file(module_name)
+		else:
+			generate_setup_file(module_name)
 		#generate callbacks code
 		generate_callbacks_file(module_name, args.paths, model)
 
 except ValueError as e:
 	print (e)
-	os.sys.exit(1)
+	exit(2)
 except IOError as e:
 	print(e[1]+'('+str(e[0])+'): '+e.filename)
-	os.sys.exit(1)
+	exit(3)
 except libxml2.libxmlError as e:
 	print('Can not parse data model: '+e.msg)
-	os.sys.exit(1)
+	exit(4)
 except subprocess.CalledProcessError as e:
 	print("Command '%s' failed (%d)" % (' '.join(e.cmd), e.returncode))
-	os.sys.exit(1)
+	exit(5)
 except KeyboardInterrupt:
 	print('Killed by user!')
-	os.sys.exit(1)
+	exit(-1)
 #except Exception as e:
 #	print('Some unspecified error occured! '+str(e))
 
-os.sys.exit(0)
+exit(0)
 
