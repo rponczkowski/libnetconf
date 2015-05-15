@@ -268,7 +268,7 @@ int ncds_sysinit(int flags)
 	if(!pacm_relaxng) {
 		goto _ERROR;
 	}
-	sprintf(pacm_relaxng, "%s/ietf-netconf-acm-data.rng", working_dir);
+	sprintf(pacm_relaxng, "%s/ietf-netconf-acm-config.rng", working_dir);
 
 	pacm_schematron = malloc(strlen(working_dir)+sizeof("/ietf-netconf-acm-schematron.xsl")+1);
 	if(!pacm_schematron) {
