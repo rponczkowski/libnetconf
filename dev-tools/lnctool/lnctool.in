@@ -57,7 +57,6 @@ transapi_version = 6
 RNGLIB='@RNGLIB@'
 XSLTDIR='@XSLTDIR@'
 TEMPLATEDIR='@TEMPLATEDIR@'
-YIN_FILE=''
 
 pyAPI = False
 no_templates = False
@@ -77,19 +76,15 @@ def pyang_output(arguments):
 
 # Find pyang and use it to convert model to YIN
 def convert_to_yin(input_file_name, search_path):
-	global YIN_FILE
 	# convert model to YIN using pyang
 	arguments = ['pyang', '-p', search_path, '-f', 'yin', input_file_name]
 	yin_data = pyang_output(arguments)
-	if not yin_data:
-		exit(1)
 	model = libxml2.parseMemory(yin_data, len(yin_data))
 	# infer name of file from input file name
 	(yin_file_name, ext) = os.path.splitext(os.path.basename(input_file_name))
 	yin_file_name+='.yin'
-	YIN_FILE=args.output_dir+'/'+yin_file_name
 	# store converted yin
-	yin_file = open(YIN_FILE, 'w')
+	yin_file = open(args.output_dir+'/'+yin_file_name, 'w')
 	yin_file.write(str(model))
 	yin_file.close()
 
@@ -824,7 +819,7 @@ try:
 
 	# whatever type the model is try to convert it to YIN
 	model = convert_to_yin(args.model.name, args.search_path)
-	(model_name, ext) = os.path.splitext(os.path.abspath(YIN_FILE))
+	(model_name, ext) = os.path.splitext(os.path.abspath(args.model.name))
 
 	if not args.augment_model is None:
 		for augment_model in args.augment_model:
@@ -834,15 +829,15 @@ try:
 
 	# when subcommand is 'validation' or 'transapi'
 	if args.subcommand != 'convert':
-		generate_validators(YIN_FILE, augment_models_paths, args.search_path, args.feature)
+		generate_validators(model_name+'.yin', augment_models_paths, args.search_path, args.feature)
 
 	if args.subcommand == 'transapi' or args.subcommand == "transapi_py":
 		if args.subcommand == 'transapi_py':
 			pyAPI = True
 		# process model and find module name
 		if args.name is None:
-			(module_name,ext) = os.path.splitext(os.path.basename(YIN_FILE))
-#			module_name = module_name.translate(None, '-@')
+			(module_name,ext) = os.path.splitext(os.path.basename(args.model.name))
+			module_name = module_name.translate(None, '-@')
 		else:
 			module_name = args.name
 
