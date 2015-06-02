@@ -69,6 +69,7 @@
 static const char rcsid[] __attribute__((used)) ="$Id: "__FILE__": "RCSID" $";
 
 /* defined in datastore.c */
+extern char* working_dir;
 int ncds_sysinit(int flags);
 void ncds_startup_internal(void);
 
@@ -299,6 +300,11 @@ API int nc_init(int flags)
 		ERROR("Either single-layer or multi-layer flag must be used in initialization.");
 		return (-1);
 	}
+
+    if((working_dir = getenv(NC_DIR_PATH_ENV)) == NULL)
+    {
+        working_dir = NC_WORKINGDIR_PATH;
+    }
 
 	/* some flags need other flags, so check that all dependencies are fullfilled */
 	if (flags & NC_INIT_NACM) {

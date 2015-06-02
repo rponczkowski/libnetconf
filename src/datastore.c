@@ -253,11 +253,6 @@ int ncds_sysinit(int flags)
 	struct model_list *list_item;
 	char *pdatastore_acm = NULL, *pacm_relaxng = NULL, *pacm_schematron = NULL;
 
-	if((working_dir = getenv(NC_DIR_PATH_ENV)) == NULL)
-	{
-		working_dir = NC_WORKINGDIR_PATH;
-	}
-
 	pdatastore_acm = malloc(strlen(working_dir)+sizeof("/datastore-acm.xml")+1);
 	if(!pdatastore_acm) {
 		goto _ERROR;
