@@ -508,13 +508,16 @@ int ncds_sysinit(int flags)
 	char *yin2yang = malloc(strlen(working_dir)+sizeof("/yin2yang.xsl")+1);
 	if(yin2yang != NULL) {
         sprintf(yin2yang, "%s/yin2yang.xsl", working_dir);
+        DBG("yin2yang path is %s", yin2yang);
     }
+
 	if (yin2yang == NULL ||
 		eaccess(yin2yang, R_OK) == -1 || (yin2yang_xsl = xsltParseStylesheetFile(BAD_CAST yin2yang)) == NULL) {
 		WARN("Unable to use %s (%s).", yin2yang, errno == 0 ? "XSLT parser failed" : strerror(errno));
 		WARN("YANG format data models will not be available via get-schema.");
 	}
-	free(yin2yang);
+	if(yin2yang)
+	    free(yin2yang);
 #endif
 
 	ret = EXIT_SUCCESS;
@@ -4331,8 +4334,11 @@ API int ncds_set_validation(struct ncds_ds* ds, int enable, const char* relaxng,
 				ret = EXIT_FAILURE;
 				goto cleanup;
 			} else {
-				rng_ctxt = xmlRelaxNGNewParserCtxt(relaxng);
-				if ((rng_schema = xmlRelaxNGParse(rng_ctxt)) == NULL) {
+				if ((rng_ctxt = xmlRelaxNGNewParserCtxt(relaxng)) == NULL) {
+				    ERROR("Failed to create parser context (%s)", relaxng);
+				    ret = EXIT_FAILURE;
+				    goto cleanup;
+				} else if ((rng_schema = xmlRelaxNGParse(rng_ctxt)) == NULL) {
 					ERROR("Failed to parse Relax NG schema (%s)", relaxng);
 					ret = EXIT_FAILURE;
 					goto cleanup;
