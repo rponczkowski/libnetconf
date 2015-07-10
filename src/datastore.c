@@ -4877,7 +4877,7 @@ static int ncxml_subtree_filter(xmlNodePtr config, xmlNodePtr filter)
 	xmlNodePtr filter_node = filter;
 	xmlNodePtr delete = NULL, delete2 = NULL;
 	char *content1 = NULL, *content2 = NULL;
-
+	int nomatch = 0;
 	int filter_in = 0, sibling_in = 0, end_node = 0, sibling_selection = 0;
 
 	/* check if this filter level is last */
@@ -4961,6 +4961,8 @@ static int ncxml_subtree_filter(xmlNodePtr config, xmlNodePtr filter)
 
 							/* go to the first filter sibing node */
 							filter_node = filter;
+
+filter:
 							/* pass all filter sibling nodes */
 							while (filter_node) {
 								if (!strcmp((char *) filter_node->name, (char *) config_node->name) &&
@@ -4980,6 +4982,7 @@ static int ncxml_subtree_filter(xmlNodePtr config, xmlNodePtr filter)
 											free(content1);
 											free(content2);
 											filter_node = filter_node->next;
+											nomatch = 1;
 											continue;
 										}
 										free(content1);
@@ -4992,8 +4995,22 @@ static int ncxml_subtree_filter(xmlNodePtr config, xmlNodePtr filter)
 							}
 							content1 = NULL;
 
+							if (!filter_node && nomatch) {
+								/* instance does not follow restrictions */
+								return 0;
+							}
+
 							/* if this config node is not in filter, remove it */
 							if (sibling_selection && !sibling_in) {
+								if (filter_node && filter_node->next) {
+									/* try another filter node */
+									filter_node = filter_node->next;
+									goto filter;
+								} else if (nomatch) {
+									/* instance does not follow restrictions */
+									return 0;
+								}
+
 								delete = config_node;
 								config_node = config_node->next;
 								xmlUnlinkNode(delete);
@@ -5004,6 +5021,15 @@ static int ncxml_subtree_filter(xmlNodePtr config, xmlNodePtr filter)
 									sibling_in = ncxml_subtree_filter(config_node->children, filter_node->children);
 								}
 								if (sibling_selection && sibling_in == 0) {
+									if (filter_node && filter_node->next) {
+										/* try another filter node */
+										filter_node = filter_node->next;
+										goto filter;
+									} else if (nomatch) {
+										/* instance does not follow restrictions */
+										return 0;
+									}
+
 									/* subtree is not a content of the filter output */
 									delete = config_node;
 
