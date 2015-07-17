@@ -146,6 +146,15 @@ void ncntf_stream_iter_start(const char* stream);
 /**
  * \todo: thread safety (?thread-specific variables)
  * @ingroup notifications
+ * @brief Start iteration on the events in the specified stream file. Iteration
+ * starts on the first event in the first part of the stream file.
+ * @param[in] stream Name of the stream to iterate.
+ */
+void ncntf_stream_iter_start_local(const char* stream);
+
+/**
+ * \todo: thread safety (?thread-specific variables)
+ * @ingroup notifications
  * @brief Pop the next event record from the stream file. The iteration must be
  * started by nc_ntf_stream_iter_start() function.
  * @param[in] stream Name of the stream to iterate.

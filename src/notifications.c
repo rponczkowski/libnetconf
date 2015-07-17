@@ -86,6 +86,7 @@ struct stream_offset {
 	const char* stream;
 	off_t eof_offset;
 	struct stream_offset* next;
+	struct stream *s;
 };
 
 static pthread_key_t ncntf_replay_ends;
@@ -594,21 +595,23 @@ static void ncntf_stream_free(struct stream *s)
 /*
  * Get the stream structure based on the given stream name
  */
-static struct stream* ncntf_stream_get(const char* stream)
+static struct stream* ncntf_stream_get(const char* stream,int ext)
 {
-	struct stream *s;
+	struct stream *s = NULL;
 	char* filepath;
 
 	if (stream == NULL) {
 		return (NULL);
 	}
-
-	/* search for the specified stream in the list according to the name */
-	for (s = streams; s != NULL; s = s->next) {
-		if (strcmp(s->name, stream) == 0) {
-			/* the specified stream does exist */
-			return (s);
-		}
+	if(!ext)
+	{
+        /* search for the specified stream in the list according to the name */
+        for (s = streams; s != NULL; s = s->next) {
+            if (strcmp(s->name, stream) == 0) {
+                /* the specified stream does exist */
+                return (s);
+            }
+        }
 	}
 
 	/*
@@ -623,8 +626,11 @@ static struct stream* ncntf_stream_get(const char* stream)
 		}
 		if (((s = read_fileheader(filepath)) != NULL) && (map_rules(s) == 0)) {
 			/* add the stream file into the stream list */
+		    if(!ext)
+		    {
 			s->next = streams;
 			streams = s;
+		    }
 		} else if (s != NULL) {
 			ERROR("Unable to map the Event stream rules file into memory.");
 			ncntf_stream_free(s);
@@ -919,7 +925,7 @@ API int ncntf_stream_allow_events(const char* stream, const char* event)
 		return (EXIT_SUCCESS);
 	}
 
-	if ((s = ncntf_stream_get(stream)) == NULL) {
+	if ((s = ncntf_stream_get(stream,0)) == NULL) {
 		/* stream does not exist or some error occurred */
 		return (EXIT_FAILURE);
 	}
@@ -998,7 +1004,7 @@ API int ncntf_stream_info(const char* stream, char** desc, char** start)
 
 	DBG_LOCK("stream_mut");
 	pthread_mutex_lock(streams_mut);
-	if ((s = ncntf_stream_get(stream)) == NULL) {
+	if ((s = ncntf_stream_get(stream,0)) == NULL) {
 		DBG_UNLOCK("streams_mut");
 		pthread_mutex_unlock(streams_mut);
 		return (EXIT_FAILURE);
@@ -1028,38 +1034,52 @@ static struct stream_offset* get_stream_offset_struct(const char* stream, struct
 	return (item);
 }
 
+static void stream_iter_start(const char* stream,int local_agent)
+{
+    struct stream *s;
+    struct stream_offset *str_off, *off_list; /* to mark where the replay ends */
+    if (ncntf_config == NULL) {
+        return;
+    }
+
+    pthread_once(&ncntf_replay_ends_once, ncntf_replay_ends_init);
+    off_list = (struct stream_offset*)pthread_getspecific(ncntf_replay_ends);
+    if (off_list == NULL || (str_off = get_stream_offset_struct(stream, off_list)) == NULL) {
+        /* the list of opened streams is empty */
+        str_off = malloc(sizeof(struct stream_offset));
+        str_off->stream = stream;
+        str_off->next = off_list;
+        str_off->s = NULL;
+        pthread_setspecific(ncntf_replay_ends, (void*)str_off);
+    }
+
+    DBG_LOCK("stream_mut");
+    pthread_mutex_lock(streams_mut);
+    if ((s = ncntf_stream_get(stream,local_agent)) == NULL) {
+        DBG_UNLOCK("streams_mut");
+        pthread_mutex_unlock(streams_mut);
+        return;
+    }
+    if(local_agent)
+        str_off->s = s;
+    else
+        str_off->s = 0;
+    /* remember the current end of file position */
+    str_off->eof_offset = lseek(s->fd_events, 0, SEEK_END);
+    /* move to the start of records section */
+    lseek(s->fd_events, s->data, SEEK_SET);
+    DBG_UNLOCK("streams_mut");
+    pthread_mutex_unlock(streams_mut);
+}
+
 API void ncntf_stream_iter_start(const char* stream)
 {
-	struct stream *s;
-	struct stream_offset *str_off, *off_list; /* to mark where the replay ends */
+    stream_iter_start(stream,0);
+}
 
-	if (ncntf_config == NULL) {
-		return;
-	}
-
-	pthread_once(&ncntf_replay_ends_once, ncntf_replay_ends_init);
-	off_list = (struct stream_offset*)pthread_getspecific(ncntf_replay_ends);
-	if (off_list == NULL || (str_off = get_stream_offset_struct(stream, off_list)) == NULL) {
-		/* the list of opened streams is empty */
-		str_off = malloc(sizeof(struct stream_offset));
-		str_off->stream = stream;
-		str_off->next = off_list;
-		pthread_setspecific(ncntf_replay_ends, (void*)str_off);
-	}
-
-	DBG_LOCK("stream_mut");
-	pthread_mutex_lock(streams_mut);
-	if ((s = ncntf_stream_get(stream)) == NULL) {
-		DBG_UNLOCK("streams_mut");
-		pthread_mutex_unlock(streams_mut);
-		return;
-	}
-	/* remember the current end of file position */
-	str_off->eof_offset = lseek(s->fd_events, 0, SEEK_END);
-	/* move to the start of records section */
-	lseek(s->fd_events, s->data, SEEK_SET);
-	DBG_UNLOCK("streams_mut");
-	pthread_mutex_unlock(streams_mut);
+API void ncntf_stream_iter_start_local(const char* stream)
+{
+    stream_iter_start(stream,1);
 }
 
 API void ncntf_stream_iter_finish(const char* stream)
@@ -1070,6 +1090,9 @@ API void ncntf_stream_iter_finish(const char* stream)
 	str_off = get_stream_offset_struct(stream, (struct stream_offset*)pthread_getspecific(ncntf_replay_ends));
 	if (str_off) {
 		str_off->eof_offset = 0;
+		if(str_off->s)
+		    ncntf_stream_free(str_off->s);
+		str_off->s = 0;
 	}
 }
 
@@ -1102,7 +1125,7 @@ API char* ncntf_stream_iter_next(const char* stream, time_t start, time_t stop, 
 
 	DBG_LOCK("stream_mut");
 	pthread_mutex_lock(streams_mut);
-	if ((s = ncntf_stream_get(stream)) == NULL) {
+	if ((s = ncntf_stream_get(stream,0)) == NULL) {
 		DBG_UNLOCK("streams_mut");
 		pthread_mutex_unlock(streams_mut);
 		return (NULL);
@@ -1122,6 +1145,8 @@ API char* ncntf_stream_iter_next(const char* stream, time_t start, time_t stop, 
 		}
 	}
 	replay_end = &(str_off->eof_offset);
+	if(str_off->s)
+	    s = str_off->s;
 
 	if (start == -1 && *replay_end != 0) {
 		/*
@@ -1239,7 +1264,6 @@ API char* ncntf_stream_iter_next(const char* stream, time_t start, time_t stop, 
 	return (text);
 }
 
-
 static void ncntf_event_stdoutprint (time_t eventtime, const char* content)
 {
 	char* t = NULL;
@@ -1268,7 +1292,7 @@ static int ncntf_event_isallowed(const char* stream, const char* event)
 		return (1);
 	}
 
-	if ((s = ncntf_stream_get(stream)) == NULL) {
+	if ((s = ncntf_stream_get(stream,0)) == NULL) {
 		/* stream does not exist or some error occurred */
 		return (0);
 	}
@@ -2259,7 +2283,7 @@ API nc_reply* ncntf_subscription_check(const nc_rpc* subscribe_rpc)
 	/* check existence of the stream */
 	DBG_LOCK("stream_mut");
 	pthread_mutex_lock(streams_mut);
-	if (ncntf_stream_get(stream) == NULL) {
+	if (ncntf_stream_get(stream,0) == NULL) {
 		DBG_UNLOCK("streams_mut");
 		pthread_mutex_unlock(streams_mut);
 		e = nc_err_new(NC_ERR_INVALID_VALUE);
