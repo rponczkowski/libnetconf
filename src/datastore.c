@@ -753,7 +753,7 @@ static void* transapi_fmon(void *arg)
 	running_buf = xmlBufferCreate();
 	pthread_cleanup_push((void (*)(void*))&xmlBufferFree, running_buf);
 
-	dummy_session = nc_session_dummy("fmon", "server", NULL, cpblts = nc_session_get_cpblts_default());
+	dummy_session = nc_session_dummy(INTERNAL_DUMMY_ID", "server", NULL, cpblts = nc_session_get_cpblts_default());
 	nc_cpblts_free(cpblts);
 	pthread_cleanup_push((void (*)(void*))&nc_session_free, dummy_session);
 
